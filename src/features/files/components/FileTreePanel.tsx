@@ -780,11 +780,14 @@ export function FileTreePanel({
             onClick={(event) => {
               event.stopPropagation();
               const absolutePath = resolvePath(node.path);
-              // Keep `+` insertion behavior aligned with native @ reference tokens.
-              const mentionText =
-                node.type === "folder"
-                  ? `@${absolutePath}`
-                  : `@${absolutePath} `;
+              // Prefer ChatInputBox bridge so `+` follows the same render/update
+              // path as native @ file-reference insertion.
+              if (typeof window !== "undefined" && window.handleFilePathFromJava) {
+                window.handleFilePathFromJava(absolutePath);
+                return;
+              }
+              // Fallback for non-ChatInputBox contexts.
+              const mentionText = `@${absolutePath}${node.type === "file" ? " " : ""}`;
               onInsertText?.(mentionText);
             }}
             aria-label={t("files.mentionFile", { name: node.name })}
