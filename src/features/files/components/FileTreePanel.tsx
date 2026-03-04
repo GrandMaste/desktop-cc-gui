@@ -830,7 +830,7 @@ export function FileTreePanel({
           {onToggleRuntimeConsole ? (
             <button
               type="button"
-              className={`ghost icon-button file-tree-toggle${isRuntimeConsoleVisible ? " is-active" : ""}`}
+              className={`ghost icon-button file-tree-toggle file-tree-toggle-runtime${isRuntimeConsoleVisible ? " is-active" : ""}`}
               onClick={onToggleRuntimeConsole}
               aria-label={t("files.openRunConsole")}
               title={t("files.openRunConsole")}

@@ -22,6 +22,10 @@
   padding: 4px;
 }
 
+.file-tree-toggle-runtime {
+  display: none;
+}
+
 .file-tree-toggle svg {
   width: 14px;
   height: 14px;
