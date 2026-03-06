@@ -745,10 +745,12 @@ function MainApp() {
   const [editorSplitLayout, setEditorSplitLayout] = useState<"vertical" | "horizontal">(
     "vertical",
   );
+  const [isEditorFileMaximized, setIsEditorFileMaximized] = useState(false);
 
   useEffect(() => {
     if (!activeEditorFilePath) {
       setActiveEditorLineRange(null);
+      setIsEditorFileMaximized(false);
     }
   }, [activeEditorFilePath]);
 
@@ -4295,6 +4297,9 @@ function MainApp() {
     editorSplitLayout,
     onToggleEditorSplitLayout: () =>
       setEditorSplitLayout((prev) => (prev === "vertical" ? "horizontal" : "vertical")),
+    isEditorFileMaximized,
+    onToggleEditorFileMaximized: () =>
+      setIsEditorFileMaximized((prev) => !prev),
     editorFilePath: activeEditorFilePath,
     editorNavigationTarget,
     openEditorTabs: openFileTabs,
@@ -4774,6 +4779,7 @@ function MainApp() {
         tabletTab={tabletTab}
         centerMode={centerMode}
         editorSplitLayout={editorSplitLayout}
+        isEditorFileMaximized={isEditorFileMaximized}
         hasActivePlan={hasActivePlan}
         activeWorkspace={Boolean(activeWorkspace)}
         sidebarNode={sidebarNodeWithTopbar}

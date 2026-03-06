@@ -248,6 +248,8 @@ type LayoutNodesOptions = {
   centerMode: "chat" | "diff" | "editor" | "memory";
   editorSplitLayout: "vertical" | "horizontal";
   onToggleEditorSplitLayout: () => void;
+  isEditorFileMaximized: boolean;
+  onToggleEditorFileMaximized: () => void;
   editorFilePath: string | null;
   editorNavigationTarget: EditorNavigationTarget | null;
   openEditorTabs: string[];
@@ -1202,6 +1204,8 @@ export function useLayoutNodes(options: LayoutNodesOptions): LayoutNodesResult {
         onSelectOpenAppId={options.onSelectOpenAppId}
         editorSplitLayout={options.editorSplitLayout}
         onToggleEditorSplitLayout={options.onToggleEditorSplitLayout}
+        isEditorFileMaximized={options.isEditorFileMaximized}
+        onToggleEditorFileMaximized={options.onToggleEditorFileMaximized}
         onNavigateToLocation={options.onOpenFile}
         onClose={options.onExitEditor}
         onInsertText={options.onInsertComposerText}

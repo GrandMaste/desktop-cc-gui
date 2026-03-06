@@ -11,6 +11,8 @@ import Columns2 from "lucide-react/dist/esm/icons/columns-2";
 import Pencil from "lucide-react/dist/esm/icons/pencil";
 import Eye from "lucide-react/dist/esm/icons/eye";
 import Code from "lucide-react/dist/esm/icons/code";
+import Maximize2 from "lucide-react/dist/esm/icons/maximize-2";
+import Minimize2 from "lucide-react/dist/esm/icons/minimize-2";
 import Rows2 from "lucide-react/dist/esm/icons/rows-2";
 import Save from "lucide-react/dist/esm/icons/save";
 import Search from "lucide-react/dist/esm/icons/search";
@@ -65,6 +67,8 @@ type FileViewPanelProps = {
   onSelectOpenAppId: (id: string) => void;
   editorSplitLayout?: "vertical" | "horizontal";
   onToggleEditorSplitLayout?: () => void;
+  isEditorFileMaximized?: boolean;
+  onToggleEditorFileMaximized?: () => void;
   navigationTarget?: {
     path: string;
     line: number;
@@ -540,6 +544,8 @@ export function FileViewPanel({
   onSelectOpenAppId,
   editorSplitLayout = "vertical",
   onToggleEditorSplitLayout,
+  isEditorFileMaximized = false,
+  onToggleEditorFileMaximized,
   navigationTarget = null,
   onNavigateToLocation,
   onClose,
@@ -1799,6 +1805,21 @@ export function FileViewPanel({
             {t("files.addToChat")}
           </button>
         )}
+        {onToggleEditorFileMaximized ? (
+          <button
+            type="button"
+            className="ghost fvp-action-btn fvp-maximize-toggle"
+            aria-label={isEditorFileMaximized ? t("common.restore") : t("menu.maximize")}
+            title={isEditorFileMaximized ? t("common.restore") : t("menu.maximize")}
+            onClick={onToggleEditorFileMaximized}
+          >
+            {isEditorFileMaximized ? (
+              <Minimize2 size={12} aria-hidden />
+            ) : (
+              <Maximize2 size={12} aria-hidden />
+            )}
+          </button>
+        ) : null}
         {onToggleEditorSplitLayout ? (
           <button
             type="button"

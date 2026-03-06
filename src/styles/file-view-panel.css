@@ -938,6 +938,13 @@
   padding: 2px 5px;
 }
 
+.fvp-maximize-toggle {
+  min-width: 20px;
+  min-height: 18px;
+  justify-content: center;
+  padding: 2px 5px;
+}
+
 .fvp-layout-toggle.is-side-by-side {
   color: var(--text-strong);
   border-color: color-mix(in srgb, var(--border-accent) 46%, var(--border-subtle));
