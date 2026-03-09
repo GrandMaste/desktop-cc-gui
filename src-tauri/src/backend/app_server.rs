@@ -47,12 +47,6 @@ const AUTO_COMPACTION_METHOD_CANDIDATES: [&str; 3] = [
     "thread/compactStart",
     "thread/compact",
 ];
-const PROXY_ENV_MAPPINGS: [(&str, &str); 4] = [
-    ("HTTP_PROXY", "http_proxy"),
-    ("HTTPS_PROXY", "https_proxy"),
-    ("ALL_PROXY", "all_proxy"),
-    ("NO_PROXY", "no_proxy"),
-];
 
 #[derive(Debug, Default, Clone)]
 struct PlanTurnState {
@@ -87,26 +81,6 @@ fn now_millis() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_else(|_| Duration::from_millis(0))
         .as_millis() as u64
-}
-
-fn read_env_var_non_empty(key: &str) -> Option<String> {
-    env::var(key)
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-}
-
-fn read_proxy_env_value(upper_key: &str, lower_key: &str) -> Option<String> {
-    read_env_var_non_empty(upper_key).or_else(|| read_env_var_non_empty(lower_key))
-}
-
-pub(crate) fn apply_proxy_env(command: &mut Command) {
-    for (upper_key, lower_key) in PROXY_ENV_MAPPINGS {
-        if let Some(value) = read_proxy_env_value(upper_key, lower_key) {
-            command.env(upper_key, &value);
-            command.env(lower_key, value);
-        }
-    }
 }
 
 fn resolve_initial_turn_start_timeout_ms() -> u64 {
@@ -1994,7 +1968,6 @@ pub(crate) fn build_codex_command_with_bin(codex_bin: Option<String>) -> Command
     if let Some(path_env) = build_codex_path_env(codex_bin.as_deref()) {
         command.env("PATH", path_env);
     }
-    apply_proxy_env(&mut command);
     command
 }
 
@@ -2004,7 +1977,6 @@ async fn check_cli_binary(bin: &str, path_env: Option<String>) -> Result<Option<
     if let Some(path) = path_env {
         command.env("PATH", path);
     }
-    apply_proxy_env(&mut command);
     command.arg("--version");
     command.stdout(std::process::Stdio::piped());
     command.stderr(std::process::Stdio::piped());
