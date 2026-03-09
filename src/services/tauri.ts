@@ -154,6 +154,10 @@ export async function isWorkspacePathDir(path: string): Promise<boolean> {
   return invoke<boolean>("is_workspace_path_dir", { path });
 }
 
+export async function ensureWorkspacePathDir(path: string): Promise<void> {
+  return invoke("ensure_workspace_path_dir", { path });
+}
+
 export async function addClone(
   sourceWorkspaceId: string,
   copiesFolder: string,

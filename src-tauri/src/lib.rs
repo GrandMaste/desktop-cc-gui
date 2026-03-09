@@ -246,6 +246,7 @@ pub fn run() {
             // Workspaces
             workspaces::list_workspaces,
             workspaces::is_workspace_path_dir,
+            workspaces::ensure_workspace_path_dir,
             workspaces::add_workspace,
             workspaces::add_clone,
             workspaces::add_worktree,

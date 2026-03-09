@@ -16,6 +16,7 @@ import "./styles/base.css";
 import "./styles/buttons.css";
 import "./styles/sidebar.css";
 import "./styles/home.css";
+import "./styles/home-chat.css";
 import "./styles/main.css";
 import "./styles/messages.css";
 import "./styles/approval-toasts.css";
@@ -83,6 +84,7 @@ import { useRenameWorktreePrompt } from "./features/workspaces/hooks/useRenameWo
 import { useLayoutController } from "./features/app/hooks/useLayoutController";
 import { useWindowLabel } from "./features/layout/hooks/useWindowLabel";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { homeDir } from "@tauri-apps/api/path";
 import { isWindowsPlatform } from "./utils/platform";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { ask } from "@tauri-apps/plugin-dialog";
@@ -152,6 +154,7 @@ import { resolveSearchScopeOnOpen } from "./features/search/utils/scope";
 import {
   getSelectedAgentConfig,
   getOpenCodeAgentsList,
+  ensureWorkspacePathDir,
   setSelectedAgentConfig,
   getWorkspaceFiles,
   pickWorkspacePath,
@@ -3214,6 +3217,65 @@ function MainApp() {
       const { panelId, cleanText } = resolveComposerKanbanPanel(trimmedOriginalText);
       const textForSending = cleanText;
 
+      // HomeChat send: no active workspace yet. Select or create one, then
+      // create a thread and jump to normal chat view before sending.
+      if (!activeWorkspaceId && !isPullRequestComposer) {
+        let workspace: WorkspaceInfo | null = null;
+        let defaultWorkspacePath: string;
+        try {
+          const resolvedHome = normalizePath(await homeDir());
+          defaultWorkspacePath = `${resolvedHome}/.codemoss/workspace`;
+          await ensureWorkspacePathDir(defaultWorkspacePath);
+        } catch (error) {
+          alertError(error);
+          return;
+        }
+        const normalizedDefaultPath = normalizePath(defaultWorkspacePath);
+        workspace = workspaces.find(
+          (entry) => normalizePath(entry.path) === normalizedDefaultPath,
+        ) ?? null;
+        if (!workspace) {
+          try {
+            workspace = await addWorkspaceFromPath(defaultWorkspacePath);
+          } catch (error) {
+            alertError(error);
+            return;
+          }
+        }
+        if (!workspace) {
+          return;
+        }
+        exitDiffView();
+        resetPullRequestSelection();
+        setWorkspaceHomeWorkspaceId(null);
+        setAppMode("chat");
+        setCenterMode("chat");
+        selectWorkspace(workspace.id);
+        if (!workspace.connected) {
+          await connectWorkspace(workspace);
+        }
+        const threadId = await startThreadForWorkspace(workspace.id, {
+          engine: activeEngine,
+          activate: true,
+        });
+        if (!threadId) {
+          return;
+        }
+        setActiveThreadId(threadId, workspace.id);
+        const fallbackText =
+          textForSending.length > 0 ? textForSending : trimmedOriginalText;
+        if (fallbackText.length > 0 || images.length > 0) {
+          await sendUserMessageToThread(
+            workspace,
+            threadId,
+            fallbackText,
+            images,
+            mergeSelectedAgentOption(options),
+          );
+        }
+        return;
+      }
+
       if (!panelId || !activeWorkspaceId || isPullRequestComposer) {
         const fallbackText =
           textForSending.length > 0 ? textForSending : trimmedOriginalText;
@@ -3326,7 +3388,15 @@ function MainApp() {
       handleComposerSend,
       mergeSelectedAgentOption,
       activeWorkspaceId,
+      normalizePath,
+      addWorkspaceFromPath,
+      alertError,
+      workspaces,
       workspacesById,
+      exitDiffView,
+      resetPullRequestSelection,
+      selectWorkspace,
+      setActiveThreadId,
       connectWorkspace,
       startThreadForWorkspace,
       forkThreadForWorkspace,
@@ -4013,6 +4083,19 @@ function MainApp() {
     setActiveThreadId,
   ]);
 
+  const handleOpenHomeChat = useCallback(() => {
+    exitDiffView();
+    resetPullRequestSelection();
+    setWorkspaceHomeWorkspaceId(null);
+    setAppMode("chat");
+    setCenterMode("chat");
+    selectHome();
+  }, [
+    exitDiffView,
+    resetPullRequestSelection,
+    selectHome,
+  ]);
+
   useArchiveShortcut({
     isEnabled: isThreadOpen,
     shortcut: appSettings.archiveThreadShortcut,
@@ -4628,6 +4711,7 @@ function MainApp() {
     onWorkspaceDrop: handleWorkspaceDrop,
     appMode,
     onAppModeChange: handleAppModeChange,
+    onOpenHomeChat: handleOpenHomeChat,
     onOpenMemory: () => {
       closeSettings();
       setAppMode("chat");

@@ -195,6 +195,10 @@ impl DaemonState {
         workspaces_core::is_workspace_path_dir_core(&path)
     }
 
+    async fn ensure_workspace_path_dir(&self, path: String) -> Result<(), String> {
+        workspaces_core::ensure_workspace_path_dir_core(&path)
+    }
+
     async fn add_workspace(
         &self,
         path: String,
@@ -1852,6 +1856,11 @@ async fn handle_rpc_request(
             let path = parse_string(&params, "path")?;
             let is_dir = state.is_workspace_path_dir(path).await;
             serde_json::to_value(is_dir).map_err(|err| err.to_string())
+        }
+        "ensure_workspace_path_dir" => {
+            let path = parse_string(&params, "path")?;
+            state.ensure_workspace_path_dir(path).await?;
+            Ok(json!({ "ok": true }))
         }
         "add_workspace" => {
             let path = parse_string(&params, "path")?;

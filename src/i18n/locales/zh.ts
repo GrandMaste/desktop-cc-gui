@@ -201,6 +201,21 @@ const zh = {
     updated: "更新于",
   },
 
+  homeChat: {
+    badge: "Workspace-aware chat home",
+    title: "MossX Agent，让你的工作更轻松",
+    subtitle: "从项目开始，快速进入对话、执行、交付。",
+    promptPlaceholder: "描述你的目标，例如：帮我为这个仓库生成一版发布说明，并附上风险检查。",
+    pathResolving: "正在解析默认项目路径…",
+    quickActions: "快捷能力",
+    quick: {
+      plan: "定计划",
+      doc: "写文档",
+      release: "发版说明",
+      review: "代码评审",
+    },
+  },
+
   // 设置
   settings: {
     title: "设置",

@@ -595,6 +595,25 @@ pub(crate) async fn is_workspace_path_dir(
 }
 
 #[tauri::command]
+pub(crate) async fn ensure_workspace_path_dir(
+    path: String,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<(), String> {
+    if remote_backend::is_remote_mode(&*state).await {
+        remote_backend::call_remote(
+            &*state,
+            app,
+            "ensure_workspace_path_dir",
+            json!({ "path": path }),
+        )
+        .await?;
+        return Ok(());
+    }
+    workspaces_core::ensure_workspace_path_dir_core(&path)
+}
+
+#[tauri::command]
 pub(crate) async fn add_workspace(
     path: String,
     codex_bin: Option<String>,

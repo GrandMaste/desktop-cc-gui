@@ -936,6 +936,32 @@
   line-height: 1;
 }
 
+.default-workspace-folder-icon {
+  width: 15px;
+  height: 15px;
+  color: #2563eb;
+  stroke-width: 2.2;
+}
+
+.workspace-row.active .default-workspace-folder-icon,
+.workspace-row.context-active .default-workspace-folder-icon {
+  color: #1d4ed8;
+}
+
+.default-workspace-badge {
+  display: inline-flex;
+  align-items: center;
+  height: 16px;
+  padding: 0 6px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in oklab, #2563eb 30%, transparent);
+  background: color-mix(in oklab, #2563eb 12%, transparent);
+  color: #1d4ed8;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
 .workspace-folder-btn:hover,
 .workspace-folder-btn[aria-expanded="true"] {
   opacity: 1;

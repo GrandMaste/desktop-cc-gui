@@ -21,6 +21,7 @@ import { useCollapsedGroups } from "../hooks/useCollapsedGroups";
 import { useSidebarMenus } from "../hooks/useSidebarMenus";
 import { useSidebarScrollFade } from "../hooks/useSidebarScrollFade";
 import { useThreadRows } from "../hooks/useThreadRows";
+import { isDefaultWorkspacePath } from "../../workspaces/utils/defaultWorkspace";
 import { formatShortcutForPlatform, isMacPlatform } from "../../../utils/shortcuts";
 import { formatRelativeTimeShort } from "../../../utils/time";
 import { EngineIcon } from "../../engine/components/EngineIcon";
@@ -120,6 +121,7 @@ type SidebarProps = {
   onWorkspaceDrop: (event: React.DragEvent<HTMLElement>) => void;
   appMode: AppMode;
   onAppModeChange: (mode: AppMode) => void;
+  onOpenHomeChat: () => void;
   onOpenMemory: () => void;
   onLockPanel?: () => void;
   onOpenProjectMemory: () => void;
@@ -190,6 +192,7 @@ export function Sidebar({
   onWorkspaceDrop,
   appMode,
   onAppModeChange,
+  onOpenHomeChat,
   onOpenMemory,
   onLockPanel,
   onOpenProjectMemory,
@@ -426,12 +429,31 @@ export function Sidebar({
         .filter((group) => group.workspaces.length > 0),
     [groupedWorkspaces, isWorkspaceMatch],
   );
+  const defaultWorkspaceEntries = useMemo(
+    () =>
+      filteredGroupedWorkspaces
+        .flatMap((group) => group.workspaces)
+        .filter((workspace) => isDefaultWorkspacePath(workspace.path)),
+    [filteredGroupedWorkspaces],
+  );
+  const filteredGroupedWorkspacesWithoutDefault = useMemo(
+    () =>
+      filteredGroupedWorkspaces
+        .map((group) => ({
+          ...group,
+          workspaces: group.workspaces.filter(
+            (workspace) => !isDefaultWorkspacePath(workspace.path),
+          ),
+        }))
+        .filter((group) => group.workspaces.length > 0),
+    [filteredGroupedWorkspaces],
+  );
 
   const isSearchActive = Boolean(normalizedQuery);
 
   const hasNamedGroupsInView = useMemo(
-    () => filteredGroupedWorkspaces.some((g) => g.id !== null),
-    [filteredGroupedWorkspaces],
+    () => filteredGroupedWorkspacesWithoutDefault.some((g) => g.id !== null),
+    [filteredGroupedWorkspacesWithoutDefault],
   );
 
   const threadRowsByWorkspace = useMemo(() => {
@@ -634,6 +656,141 @@ export function Sidebar({
     });
   }, [t]);
 
+  const renderWorkspaceEntry = useCallback((entry: WorkspaceInfo) => {
+    const threads = threadsByWorkspace[entry.id] ?? [];
+    const isCollapsed = entry.settings.sidebarCollapsed;
+    const isExpanded = expandedWorkspaces.has(entry.id);
+    const threadRows = threadRowsByWorkspace.get(entry.id);
+    const unpinnedRows = threadRows?.unpinnedRows ?? [];
+    const totalThreadRoots = threadRows?.totalRoots ?? 0;
+    const nextCursor =
+      threadListCursorByWorkspace[entry.id] ?? null;
+    const showThreadList =
+      !isCollapsed && (threads.length > 0 || Boolean(nextCursor));
+    const isLoadingThreads =
+      threadListLoadingByWorkspace[entry.id] ?? false;
+    const showThreadLoader =
+      !isCollapsed && isLoadingThreads && threads.length === 0;
+    const isPaging = threadListPagingByWorkspace[entry.id] ?? false;
+    const worktrees = worktreesByParent.get(entry.id) ?? [];
+    const isWorktreeSectionCollapsed =
+      collapsedWorktreeSections.has(entry.id);
+    const hasPrimaryActiveThread =
+      entry.id === activeWorkspaceId && Boolean(activeThreadId);
+    return (
+      <WorkspaceCard
+        key={entry.id}
+        workspace={entry}
+        workspaceName={renderHighlightedName(entry.name)}
+        isActive={entry.id === activeWorkspaceId}
+        hasPrimaryActiveThread={hasPrimaryActiveThread}
+        isCollapsed={isCollapsed}
+        onSelectWorkspace={onSelectWorkspace}
+        onShowWorkspaceMenu={showWorkspaceMenu}
+        onToggleWorkspaceCollapse={onToggleWorkspaceCollapse}
+      >
+        {!isCollapsed && worktrees.length > 0 && (
+          <WorktreeSection
+            parentWorkspaceId={entry.id}
+            worktrees={worktrees}
+            isSectionCollapsed={isWorktreeSectionCollapsed}
+            onToggleSectionCollapse={handleToggleWorktreeSection}
+            deletingWorktreeIds={deletingWorktreeIds}
+            threadsByWorkspace={threadsByWorkspace}
+            threadStatusById={threadStatusById}
+            threadListLoadingByWorkspace={threadListLoadingByWorkspace}
+            threadListPagingByWorkspace={threadListPagingByWorkspace}
+            threadListCursorByWorkspace={threadListCursorByWorkspace}
+            expandedWorkspaces={expandedWorkspaces}
+            activeWorkspaceId={activeWorkspaceId}
+            activeThreadId={activeThreadId}
+            getThreadRows={getThreadRows}
+            getThreadTime={getThreadTime}
+            isThreadPinned={isThreadPinned}
+            isThreadAutoNaming={isThreadAutoNaming}
+            getPinTimestamp={getPinTimestamp}
+            onSelectWorkspace={onSelectWorkspace}
+            onConnectWorkspace={onConnectWorkspace}
+            onToggleWorkspaceCollapse={onToggleWorkspaceCollapse}
+            onSelectThread={onSelectThread}
+            onShowThreadMenu={showThreadMenu}
+            deleteConfirmThreadId={deleteConfirmThreadId}
+            deleteConfirmWorkspaceId={deleteConfirmWorkspaceId}
+            deleteConfirmBusy={deleteConfirmBusy}
+            onCancelDeleteConfirm={onCancelDeleteConfirm}
+            onConfirmDeleteConfirm={onConfirmDeleteConfirm}
+            onShowWorktreeMenu={showWorktreeMenu}
+            onToggleExpanded={handleToggleExpanded}
+            onLoadOlderThreads={onLoadOlderThreads}
+          />
+        )}
+        {showThreadList && (
+          <ThreadList
+            workspaceId={entry.id}
+            pinnedRows={[]}
+            unpinnedRows={unpinnedRows}
+            totalThreadRoots={totalThreadRoots}
+            isExpanded={isExpanded}
+            nextCursor={nextCursor}
+            isPaging={isPaging}
+            activeWorkspaceId={activeWorkspaceId}
+            activeThreadId={activeThreadId}
+            threadStatusById={threadStatusById}
+            getThreadTime={getThreadTime}
+            isThreadPinned={isThreadPinned}
+            isThreadAutoNaming={isThreadAutoNaming}
+            onToggleExpanded={handleToggleExpanded}
+            onLoadOlderThreads={onLoadOlderThreads}
+            onSelectThread={onSelectThread}
+            onShowThreadMenu={showThreadMenu}
+            deleteConfirmThreadId={deleteConfirmThreadId}
+            deleteConfirmWorkspaceId={deleteConfirmWorkspaceId}
+            deleteConfirmBusy={deleteConfirmBusy}
+            onCancelDeleteConfirm={onCancelDeleteConfirm}
+            onConfirmDeleteConfirm={onConfirmDeleteConfirm}
+          />
+        )}
+        {showThreadLoader && (
+          <ThreadLoading />
+        )}
+      </WorkspaceCard>
+    );
+  }, [
+    activeThreadId,
+    activeWorkspaceId,
+    collapsedWorktreeSections,
+    deleteConfirmBusy,
+    deleteConfirmThreadId,
+    deleteConfirmWorkspaceId,
+    deletingWorktreeIds,
+    expandedWorkspaces,
+    getPinTimestamp,
+    getThreadRows,
+    getThreadTime,
+    handleToggleExpanded,
+    handleToggleWorktreeSection,
+    isThreadAutoNaming,
+    isThreadPinned,
+    onCancelDeleteConfirm,
+    onConfirmDeleteConfirm,
+    onConnectWorkspace,
+    onLoadOlderThreads,
+    onSelectThread,
+    onSelectWorkspace,
+    showThreadMenu,
+    showWorkspaceMenu,
+    showWorktreeMenu,
+    onToggleWorkspaceCollapse,
+    renderHighlightedName,
+    threadListCursorByWorkspace,
+    threadListLoadingByWorkspace,
+    threadListPagingByWorkspace,
+    threadRowsByWorkspace,
+    threadStatusById,
+    threadsByWorkspace,
+    worktreesByParent,
+  ]);
+
   return (
     <aside
       className={`sidebar${isSearchOpen ? " search-open" : ""}`}
@@ -701,7 +858,7 @@ export function Sidebar({
             <button
               type="button"
               className={`sidebar-primary-nav-item sidebar-primary-nav-mode-item ${appMode === "chat" ? "is-active" : ""}`}
-              onClick={() => onAppModeChange("chat")}
+              onClick={onOpenHomeChat}
               title={t("sidebar.quickNewThread")}
               aria-label={t("sidebar.quickNewThread")}
               data-tauri-drag-region="false"
@@ -800,7 +957,8 @@ export function Sidebar({
               </button>
             </div>
             <div className="workspace-list">
-          {filteredGroupedWorkspaces.map((group) => {
+          {defaultWorkspaceEntries.map(renderWorkspaceEntry)}
+          {filteredGroupedWorkspacesWithoutDefault.map((group) => {
             const groupId = group.id;
             const showGroupHeader = Boolean(groupId) || hasNamedGroupsInView;
             const toggleId = groupId ?? (showGroupHeader ? UNGROUPED_COLLAPSE_ID : null);
@@ -818,110 +976,11 @@ export function Sidebar({
                 isCollapsed={isGroupCollapsed}
                 onToggleCollapse={toggleGroupCollapse}
               >
-                {visibleWorkspaces.map((entry) => {
-                  const threads = threadsByWorkspace[entry.id] ?? [];
-                  const isCollapsed = entry.settings.sidebarCollapsed;
-                  const isExpanded = expandedWorkspaces.has(entry.id);
-                  const threadRows = threadRowsByWorkspace.get(entry.id);
-                  const unpinnedRows = threadRows?.unpinnedRows ?? [];
-                  const totalThreadRoots = threadRows?.totalRoots ?? 0;
-                  const nextCursor =
-                    threadListCursorByWorkspace[entry.id] ?? null;
-                  const showThreadList =
-                    !isCollapsed && (threads.length > 0 || Boolean(nextCursor));
-                  const isLoadingThreads =
-                    threadListLoadingByWorkspace[entry.id] ?? false;
-                  const showThreadLoader =
-                    !isCollapsed && isLoadingThreads && threads.length === 0;
-                  const isPaging = threadListPagingByWorkspace[entry.id] ?? false;
-                  const worktrees = worktreesByParent.get(entry.id) ?? [];
-                  const isWorktreeSectionCollapsed =
-                    collapsedWorktreeSections.has(entry.id);
-                  const hasPrimaryActiveThread =
-                    entry.id === activeWorkspaceId && Boolean(activeThreadId);
-                  return (
-                    <WorkspaceCard
-                      key={entry.id}
-                      workspace={entry}
-                      workspaceName={renderHighlightedName(entry.name)}
-                      isActive={entry.id === activeWorkspaceId}
-                      hasPrimaryActiveThread={hasPrimaryActiveThread}
-                      isCollapsed={isCollapsed}
-                      onSelectWorkspace={onSelectWorkspace}
-                      onShowWorkspaceMenu={showWorkspaceMenu}
-                      onToggleWorkspaceCollapse={onToggleWorkspaceCollapse}
-                    >
-                      {!isCollapsed && worktrees.length > 0 && (
-                        <WorktreeSection
-                          parentWorkspaceId={entry.id}
-                          worktrees={worktrees}
-                          isSectionCollapsed={isWorktreeSectionCollapsed}
-                          onToggleSectionCollapse={handleToggleWorktreeSection}
-                          deletingWorktreeIds={deletingWorktreeIds}
-                          threadsByWorkspace={threadsByWorkspace}
-                          threadStatusById={threadStatusById}
-                          threadListLoadingByWorkspace={threadListLoadingByWorkspace}
-                          threadListPagingByWorkspace={threadListPagingByWorkspace}
-                          threadListCursorByWorkspace={threadListCursorByWorkspace}
-                          expandedWorkspaces={expandedWorkspaces}
-                          activeWorkspaceId={activeWorkspaceId}
-                          activeThreadId={activeThreadId}
-                          getThreadRows={getThreadRows}
-                          getThreadTime={getThreadTime}
-                          isThreadPinned={isThreadPinned}
-                          isThreadAutoNaming={isThreadAutoNaming}
-                          getPinTimestamp={getPinTimestamp}
-                          onSelectWorkspace={onSelectWorkspace}
-                          onConnectWorkspace={onConnectWorkspace}
-                          onToggleWorkspaceCollapse={onToggleWorkspaceCollapse}
-                          onSelectThread={onSelectThread}
-                          onShowThreadMenu={showThreadMenu}
-                          deleteConfirmThreadId={deleteConfirmThreadId}
-                          deleteConfirmWorkspaceId={deleteConfirmWorkspaceId}
-                          deleteConfirmBusy={deleteConfirmBusy}
-                          onCancelDeleteConfirm={onCancelDeleteConfirm}
-                          onConfirmDeleteConfirm={onConfirmDeleteConfirm}
-                          onShowWorktreeMenu={showWorktreeMenu}
-                          onToggleExpanded={handleToggleExpanded}
-                          onLoadOlderThreads={onLoadOlderThreads}
-                        />
-                      )}
-                      {showThreadList && (
-                        <ThreadList
-                          workspaceId={entry.id}
-                          pinnedRows={[]}
-                          unpinnedRows={unpinnedRows}
-                          totalThreadRoots={totalThreadRoots}
-                          isExpanded={isExpanded}
-                          nextCursor={nextCursor}
-                          isPaging={isPaging}
-                          activeWorkspaceId={activeWorkspaceId}
-                          activeThreadId={activeThreadId}
-                          threadStatusById={threadStatusById}
-                          getThreadTime={getThreadTime}
-                          isThreadPinned={isThreadPinned}
-                          isThreadAutoNaming={isThreadAutoNaming}
-                          onToggleExpanded={handleToggleExpanded}
-                          onLoadOlderThreads={onLoadOlderThreads}
-                          onSelectThread={onSelectThread}
-                          onShowThreadMenu={showThreadMenu}
-                          deleteConfirmThreadId={deleteConfirmThreadId}
-                          deleteConfirmWorkspaceId={deleteConfirmWorkspaceId}
-                          deleteConfirmBusy={deleteConfirmBusy}
-                          onCancelDeleteConfirm={onCancelDeleteConfirm}
-                          onConfirmDeleteConfirm={onConfirmDeleteConfirm}
-                        />
-                      )}
-                      {showThreadLoader && (
-                        <ThreadLoading />
-                      )}
-                    </WorkspaceCard>
-                  );
-                })}
+                {visibleWorkspaces.map(renderWorkspaceEntry)}
               </WorkspaceGroup>
             );
           })}
-          {!filteredGroupedWorkspaces.length && (
+          {!filteredGroupedWorkspacesWithoutDefault.length && defaultWorkspaceEntries.length === 0 && (
             <div className="empty">
               {isSearchActive
                 ? t("sidebar.noProjectsMatch")

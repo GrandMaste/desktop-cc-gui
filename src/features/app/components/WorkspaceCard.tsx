@@ -1,5 +1,8 @@
 import type { MouseEvent } from "react";
 import type { WorkspaceInfo } from "../../../types";
+import Folder from "lucide-react/dist/esm/icons/folder";
+import FolderOpen from "lucide-react/dist/esm/icons/folder-open";
+import { isDefaultWorkspacePath } from "../../workspaces/utils/defaultWorkspace";
 
 type WorkspaceCardProps = {
   workspace: WorkspaceInfo;
@@ -24,6 +27,8 @@ export function WorkspaceCard({
   onToggleWorkspaceCollapse,
   children,
 }: WorkspaceCardProps) {
+  const isDefaultWorkspace = isDefaultWorkspacePath(workspace.path);
+
   const handleRowClick = () => {
     onSelectWorkspace(workspace.id);
     onToggleWorkspaceCollapse(workspace.id, !isCollapsed);
@@ -52,14 +57,27 @@ export function WorkspaceCard({
       >
         <div className="workspace-header-content">
           <button className="workspace-folder-btn">
-            {isActive ? (
-              <span className="codicon codicon-folder-opened" style={{ fontSize: "16px" }} />
+            {isDefaultWorkspace ? (
+              isActive ? (
+                <FolderOpen className="default-workspace-folder-icon" aria-hidden />
+              ) : (
+                <Folder className="default-workspace-folder-icon" aria-hidden />
+              )
             ) : (
-              <span className="codicon codicon-folder" style={{ fontSize: "16px" }} />
+              isActive ? (
+                <span className="codicon codicon-folder-opened" style={{ fontSize: "16px" }} />
+              ) : (
+                <span className="codicon codicon-folder" style={{ fontSize: "16px" }} />
+              )
             )}
           </button>
 
           <span className="workspace-name-text">{workspaceName ?? workspace.name}</span>
+          {isDefaultWorkspace ? (
+            <span className="default-workspace-badge" aria-label="Default Workspace">
+              Default
+            </span>
+          ) : null}
 
           <div className="workspace-actions">
             <button

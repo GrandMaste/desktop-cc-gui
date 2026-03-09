@@ -104,6 +104,7 @@ const baseProps = {
   onWorkspaceDrop: vi.fn(),
   appMode: "chat" as const,
   onAppModeChange: vi.fn(),
+  onOpenHomeChat: vi.fn(),
   onOpenMemory: vi.fn(),
   onLockPanel: vi.fn(),
   onOpenProjectMemory: vi.fn(),

@@ -1331,6 +1331,7 @@ export const Messages = memo(function Messages({
   );
   const effectiveState = conversationState ?? fallbackConversationState;
   const items = effectiveState.items;
+  const plan = effectiveState.plan;
   const userInputRequests = effectiveState.userInputQueue;
   const workspaceId = effectiveState.meta.workspaceId || legacyWorkspaceId;
   const threadId = effectiveState.meta.threadId || legacyThreadId;
@@ -1368,6 +1369,7 @@ export const Messages = memo(function Messages({
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [activeAnchorId, setActiveAnchorId] = useState<string | null>(null);
   const [showAllHistoryItems, setShowAllHistoryItems] = useState(false);
+  const [isPlanPreviewOpen, setIsPlanPreviewOpen] = useState(false);
   const [isSelectionFrozen, setIsSelectionFrozen] = useState(false);
   const copyTimeoutRef = useRef<number | null>(null);
   const planPanelFocusRafRef = useRef<number | null>(null);
@@ -1897,6 +1899,35 @@ export const Messages = memo(function Messages({
       )
       : null;
 
+  const planQuickViewNode = plan
+    ? (
+      <div
+        className="message assistant"
+        style={{ marginTop: 6, marginBottom: 6 }}
+      >
+        <div className="bubble message-bubble" style={{ maxWidth: 560 }}>
+          <button
+            type="button"
+            className="ghost"
+            onClick={() => setIsPlanPreviewOpen((previous) => !previous)}
+            aria-label="Plan"
+            style={{ marginBottom: isPlanPreviewOpen ? 8 : 0 }}
+          >
+            Plan
+          </button>
+          {isPlanPreviewOpen && (
+            <div style={{ display: "grid", gap: 6 }}>
+              {plan.explanation ? <div>{plan.explanation}</div> : null}
+              {plan.steps.map((step, index) => (
+                <div key={`${plan.turnId}-${index}-${step.step}`}>{step.step}</div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    )
+    : null;
+
   const renderSingleItem = (item: ConversationItem) => {
     if (item.kind === "message") {
       const isCopied = copiedMessageId === item.id;
@@ -2079,6 +2110,7 @@ export const Messages = memo(function Messages({
             </div>
           )}
           {groupedEntries.map(renderEntry)}
+          {planQuickViewNode}
           {userInputNode}
           <WorkingIndicator
             isThinking={isThinking}

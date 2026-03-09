@@ -2,7 +2,7 @@ import { useCallback, useMemo, useRef, type DragEvent, type MouseEvent, type Rea
 import { useTranslation } from "react-i18next";
 import ArrowLeft from "lucide-react/dist/esm/icons/arrow-left";
 import { Sidebar } from "../../app/components/Sidebar";
-import { Home } from "../../home/components/Home";
+import { HomeChat } from "../../home/components/HomeChat";
 import { MainHeader } from "../../app/components/MainHeader";
 import { Messages } from "../../messages/components/Messages";
 import { ApprovalToasts } from "../../app/components/ApprovalToasts";
@@ -206,6 +206,7 @@ type LayoutNodesOptions = {
   onWorkspaceDrop: (event: DragEvent<HTMLElement>) => void;
   appMode: AppMode;
   onAppModeChange: (mode: AppMode) => void;
+  onOpenHomeChat: () => void;
   onOpenMemory: () => void;
   onOpenProjectMemory: () => void;
   onOpenReleaseNotes: () => void;
@@ -740,6 +741,7 @@ export function useLayoutNodes(options: LayoutNodesOptions): LayoutNodesResult {
       onWorkspaceDrop={options.onWorkspaceDrop}
       appMode={options.appMode}
       onAppModeChange={options.onAppModeChange}
+      onOpenHomeChat={options.onOpenHomeChat}
       onOpenMemory={options.onOpenMemory}
       onLockPanel={options.onLockPanel}
       onOpenProjectMemory={options.onOpenProjectMemory}
@@ -965,11 +967,11 @@ export function useLayoutNodes(options: LayoutNodesOptions): LayoutNodesResult {
   );
 
   const homeNode = (
-    <Home
-      onOpenProject={options.onAddWorkspace}
+    <HomeChat
       latestAgentRuns={options.latestAgentRuns}
       isLoadingLatestAgents={options.isLoadingLatestAgents}
       onSelectThread={options.onSelectHomeThread}
+      composerNode={composerNode}
     />
   );
 

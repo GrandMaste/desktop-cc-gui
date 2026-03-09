@@ -202,6 +202,22 @@ const en = {
     updated: "Updated",
   },
 
+  homeChat: {
+    badge: "Workspace-aware chat home",
+    title: "MossX Agent, make work easier",
+    subtitle: "Start from projects, then move fast into chat, execution, and delivery.",
+    promptPlaceholder:
+      "Describe your goal, for example: Generate release notes for this repository and include risk checks.",
+    pathResolving: "Resolving default project path...",
+    quickActions: "Quick actions",
+    quick: {
+      plan: "Plan",
+      doc: "Docs",
+      release: "Release notes",
+      review: "Code review",
+    },
+  },
+
   // Settings
   settings: {
     title: "Settings",
