@@ -147,6 +147,33 @@ describe("useThreadActions", () => {
     expect(loadedThreadsRef.current["thread-1"]).toBe(true);
   });
 
+  it("starts a thread when start_thread returns result.threadId", async () => {
+    vi.mocked(startThread).mockResolvedValue({
+      result: { threadId: "thread-1" },
+    });
+
+    const { result, dispatch, loadedThreadsRef } = renderActions();
+
+    let threadId: string | null = null;
+    await act(async () => {
+      threadId = await result.current.startThreadForWorkspace("ws-1");
+    });
+
+    expect(threadId).toBe("thread-1");
+    expect(dispatch).toHaveBeenCalledWith({
+      type: "ensureThread",
+      workspaceId: "ws-1",
+      threadId: "thread-1",
+      engine: "codex",
+    });
+    expect(dispatch).toHaveBeenCalledWith({
+      type: "setActiveThreadId",
+      workspaceId: "ws-1",
+      threadId: "thread-1",
+    });
+    expect(loadedThreadsRef.current["thread-1"]).toBe(true);
+  });
+
   it("starts an opencode pending thread locally", async () => {
     const { result, dispatch, loadedThreadsRef } = renderActions();
 

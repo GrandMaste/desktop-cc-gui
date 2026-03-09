@@ -727,6 +727,34 @@ describe("useThreadMessaging", () => {
     );
   });
 
+  it("adds optimistic user bubble immediately for codex send", async () => {
+    const dispatch = vi.fn();
+    const { result } = makeHook("codex", { dispatch });
+
+    await act(async () => {
+      await result.current.sendUserMessageToThread(workspace, "thread-1", "hello codex");
+    });
+
+    const optimisticCall = dispatch.mock.calls.find(
+      ([action]) =>
+        action &&
+        typeof action === "object" &&
+        "type" in action &&
+        (action as { type?: string }).type === "upsertItem" &&
+        "item" in action &&
+        (action as { item?: { kind?: string; role?: string; text?: string } }).item?.kind ===
+          "message" &&
+        (action as { item?: { kind?: string; role?: string; text?: string } }).item?.role ===
+          "user" &&
+        (action as { item?: { kind?: string; role?: string; text?: string } }).item?.text ===
+          "hello codex",
+    );
+
+    expect(optimisticCall).toBeDefined();
+    const optimisticAction = optimisticCall?.[0] as { item?: { id?: string } };
+    expect(optimisticAction.item?.id).toMatch(/^optimistic-user-/);
+  });
+
   it("passes custom spec root through codex send when configured", async () => {
     vi.mocked(getClientStoreSync).mockImplementation((_store, key) => {
       if (key === "specHub.specRoot.ws-1") {

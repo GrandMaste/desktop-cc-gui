@@ -722,7 +722,9 @@ export function useThreadMessaging({
 
       const wasProcessing =
         (threadStatusById[threadId]?.isProcessing ?? false) && steerEnabled;
-      if (wasProcessing) {
+      const shouldAddOptimisticUserBubble =
+        resolvedEngine === "codex" || wasProcessing;
+      if (shouldAddOptimisticUserBubble) {
         const optimisticText = visibleUserText;
         if (optimisticText || images.length > 0) {
           dispatch({
@@ -956,7 +958,8 @@ export function useThreadMessaging({
           setActiveTurnId(threadId, turnId);
 
         } else {
-          // Codex is event-driven and emits user/assistant events from backend.
+          // Codex assistant/tool events are event-driven from backend.
+          // User message bubble is inserted optimistically on send for instant feedback.
           const preferredLanguage = i18n.language.toLowerCase().startsWith("zh")
             ? "zh"
             : "en";

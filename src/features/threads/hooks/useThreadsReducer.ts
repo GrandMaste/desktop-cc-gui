@@ -31,6 +31,69 @@ function extractRenameText(text: string) {
   return withoutSkills.replace(/\s+/g, " ").trim();
 }
 
+const OPTIMISTIC_USER_ITEM_PREFIX = "optimistic-user-";
+
+type MessageItem = Extract<ConversationItem, { kind: "message" }>;
+type UserMessageItem = MessageItem & { role: "user" };
+
+function isUserMessageItem(item: ConversationItem): item is UserMessageItem {
+  return item.kind === "message" && item.role === "user";
+}
+
+function isOptimisticUserMessage(
+  item: ConversationItem,
+): item is UserMessageItem {
+  return isUserMessageItem(item) && item.id.startsWith(OPTIMISTIC_USER_ITEM_PREFIX);
+}
+
+function normalizeComparableUserText(text: string) {
+  return text.replace(/\s+/g, " ").trim();
+}
+
+function normalizeUserImages(images: string[] | undefined) {
+  return Array.isArray(images) ? images : [];
+}
+
+function areSameUserImages(left: string[], right: string[]) {
+  if (left.length !== right.length) {
+    return false;
+  }
+  return left.every((image, index) => image === right[index]);
+}
+
+function dropMatchingOptimisticUserMessage(
+  list: ConversationItem[],
+  incoming: UserMessageItem,
+) {
+  let matchedIndex = -1;
+  let fallbackIndex = -1;
+  const incomingText = normalizeComparableUserText(incoming.text);
+  const incomingImages = normalizeUserImages(incoming.images);
+  for (let index = 0; index < list.length; index += 1) {
+    const item = list[index];
+    if (!isOptimisticUserMessage(item)) {
+      continue;
+    }
+    if (fallbackIndex < 0) {
+      fallbackIndex = index;
+    }
+    const textMatches = normalizeComparableUserText(item.text) === incomingText;
+    const imageMatches = areSameUserImages(
+      normalizeUserImages(item.images),
+      incomingImages,
+    );
+    if (textMatches && imageMatches) {
+      matchedIndex = index;
+      break;
+    }
+  }
+  const targetIndex = matchedIndex >= 0 ? matchedIndex : fallbackIndex;
+  if (targetIndex < 0) {
+    return list;
+  }
+  return [...list.slice(0, targetIndex), ...list.slice(targetIndex + 1)];
+}
+
 function getAssistantTextForRename(
   items: ConversationItem[],
   itemId?: string,
@@ -1807,7 +1870,12 @@ export function threadReducer(state: ThreadState, action: ThreadAction): ThreadS
     case "upsertItem": {
       let list = state.itemsByThread[action.threadId] ?? [];
       const item = normalizeItem(action.item);
-      const isUserMessage = item.kind === "message" && item.role === "user";
+      const isUserMessage = isUserMessageItem(item);
+      const isOptimisticUser =
+        isUserMessage && item.id.startsWith(OPTIMISTIC_USER_ITEM_PREFIX);
+      if (isUserMessage && !isOptimisticUser) {
+        list = dropMatchingOptimisticUserMessage(list, item);
+      }
       const hadUserMessage = isUserMessage
         ? list.some((entry) => entry.kind === "message" && entry.role === "user")
         : false;

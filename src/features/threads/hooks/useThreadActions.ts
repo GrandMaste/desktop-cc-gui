@@ -181,8 +181,23 @@ export function useThreadActions({
   const workspacePathsByIdRef = useRef<Record<string, string>>({});
 
   const extractThreadId = useCallback((response: Record<string, any>) => {
-    const thread = response.result?.thread ?? response.thread ?? null;
-    return String(thread?.id ?? "");
+    const candidates = [
+      response.result?.thread?.id,
+      response.result?.threadId,
+      response.result?.thread_id,
+      response.thread?.id,
+      response.threadId,
+      response.thread_id,
+    ];
+    for (const candidate of candidates) {
+      if (typeof candidate === "string" || typeof candidate === "number") {
+        const normalized = String(candidate).trim();
+        if (normalized) {
+          return normalized;
+        }
+      }
+    }
+    return "";
   }, []);
 
   const startThreadForWorkspace = useCallback(

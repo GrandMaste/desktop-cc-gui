@@ -94,6 +94,87 @@ describe("threadReducer", () => {
     }
   });
 
+  it("reconciles optimistic user bubble when backend user message arrives", () => {
+    const base: ThreadState = {
+      ...initialState,
+      itemsByThread: {
+        "thread-1": [
+          {
+            id: "optimistic-user-1",
+            kind: "message",
+            role: "user",
+            text: "hello codex",
+          },
+        ],
+      },
+      threadsByWorkspace: {
+        "ws-1": [{ id: "thread-1", name: "Agent 1", updatedAt: 1 }],
+      },
+    };
+
+    const next = threadReducer(base, {
+      type: "upsertItem",
+      workspaceId: "ws-1",
+      threadId: "thread-1",
+      item: {
+        id: "user-1",
+        kind: "message",
+        role: "user",
+        text: "hello codex",
+      },
+      hasCustomName: false,
+    });
+
+    const items = next.itemsByThread["thread-1"] ?? [];
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      id: "user-1",
+      kind: "message",
+      role: "user",
+      text: "hello codex",
+    });
+  });
+
+  it("drops oldest optimistic user bubble when backend payload text differs", () => {
+    const base: ThreadState = {
+      ...initialState,
+      itemsByThread: {
+        "thread-1": [
+          {
+            id: "optimistic-user-1",
+            kind: "message",
+            role: "user",
+            text: "hello codex",
+          },
+        ],
+      },
+      threadsByWorkspace: {
+        "ws-1": [{ id: "thread-1", name: "Agent 1", updatedAt: 1 }],
+      },
+    };
+
+    const next = threadReducer(base, {
+      type: "upsertItem",
+      workspaceId: "ws-1",
+      threadId: "thread-1",
+      item: {
+        id: "user-2",
+        kind: "message",
+        role: "user",
+        text: "[Spec Root Priority] ... [User Input] hello codex",
+      },
+      hasCustomName: false,
+    });
+
+    const items = next.itemsByThread["thread-1"] ?? [];
+    expect(items).toHaveLength(1);
+    expect(items[0]?.id).toBe("user-2");
+    expect(items[0]?.kind).toBe("message");
+    if (items[0]?.kind === "message") {
+      expect(items[0].role).toBe("user");
+    }
+  });
+
   it("renames auto-generated thread from assistant output when no user message", () => {
     const threads: ThreadSummary[] = [
       { id: "thread-1", name: "Agent 1", updatedAt: 1 },
