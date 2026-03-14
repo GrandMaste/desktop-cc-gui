@@ -1411,6 +1411,49 @@ describe("WorkspaceSessionActivityPanel", () => {
     expect(view.container.querySelector(".session-activity-event-reasoning")).toBeTruthy();
   });
 
+  it("hides zero-count tabs and falls back to all when current tab becomes hidden", () => {
+    const initialViewModel = createViewModel();
+    initialViewModel.timeline = initialViewModel.timeline.filter(
+      (event) => event.kind === "reasoning",
+    );
+
+    const view = render(
+      <WorkspaceSessionActivityPanel
+        workspaceId="workspace-1"
+        viewModel={initialViewModel}
+        onOpenDiffPath={vi.fn()}
+        onSelectThread={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByRole("tab", { name: /activityPanel\.tabs\.command/i })).toBeNull();
+    expect(screen.queryByRole("tab", { name: /activityPanel\.tabs\.file/i })).toBeNull();
+    expect(screen.queryByRole("tab", { name: /activityPanel\.tabs\.task/i })).toBeNull();
+    expect(screen.queryByRole("tab", { name: /activityPanel\.tabs\.explore/i })).toBeNull();
+    expect(screen.getByRole("tab", { name: /activityPanel\.tabs\.reasoning1/i })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("tab", { name: /activityPanel\.tabs\.reasoning1/i }));
+
+    const updatedViewModel = createViewModel();
+    updatedViewModel.timeline = updatedViewModel.timeline.filter(
+      (event) => event.kind === "command",
+    );
+
+    view.rerender(
+      <WorkspaceSessionActivityPanel
+        workspaceId="workspace-1"
+        viewModel={updatedViewModel}
+        onOpenDiffPath={vi.fn()}
+        onSelectThread={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByRole("tab", { name: /activityPanel\.tabs\.reasoning/i })).toBeNull();
+    expect(screen.getByRole("tab", { name: /activityPanel\.tabs\.command1/i })).toBeTruthy();
+    expect(view.container.querySelectorAll(".session-activity-event")).toHaveLength(1);
+    expect(view.container.querySelector(".session-activity-event-command")).toBeTruthy();
+  });
+
   it("renders an explicit live edit preview toggle when provided", () => {
     const onToggleLiveEditPreview = vi.fn();
 

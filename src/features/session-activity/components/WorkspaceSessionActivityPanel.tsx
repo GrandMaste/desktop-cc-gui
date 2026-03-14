@@ -392,6 +392,10 @@ export function WorkspaceSessionActivityPanel({
     { id: "explore", label: t("activityPanel.tabs.explore") },
     { id: "reasoning", label: t("activityPanel.tabs.reasoning") },
   ];
+  const visibleTabItems = useMemo(
+    () => tabItems.filter((tab) => tabCounts[tab.id] > 0),
+    [tabCounts, tabItems],
+  );
   const relatedSessionSummaries = useMemo(
     () => viewModel.sessionSummaries.filter((session) => session.sessionRole === "child"),
     [viewModel.sessionSummaries],
@@ -408,6 +412,13 @@ export function WorkspaceSessionActivityPanel({
     }
     return latestEvent?.eventId ?? null;
   }, [viewModel.timeline]);
+
+  useEffect(() => {
+    if (tabCounts[activeTab] > 0) {
+      return;
+    }
+    setActiveTab("all");
+  }, [activeTab, tabCounts]);
 
   useEffect(() => {
     if (groupedTimeline.length === 0) {
@@ -987,7 +998,7 @@ export function WorkspaceSessionActivityPanel({
               role="tablist"
               aria-label={t("activityPanel.tabs.ariaLabel")}
             >
-              {tabItems.map((tab) => (
+              {visibleTabItems.map((tab) => (
                 <button
                   key={tab.id}
                   type="button"
