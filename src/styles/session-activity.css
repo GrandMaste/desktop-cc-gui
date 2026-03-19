@@ -475,28 +475,55 @@
   position: absolute;
   top: 8px;
   right: 8px;
-  min-width: 16px;
-  height: 16px;
-  padding: 0 4px;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
   border-radius: 999px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 700;
   line-height: 1;
+  letter-spacing: 0.01em;
 }
 
 .session-activity-radar-corner-badge.is-unread {
-  color: #3b82f6;
-  background: color-mix(in srgb, #3b82f6 18%, transparent);
-  border: 1px solid color-mix(in srgb, #3b82f6 44%, transparent);
+  --session-radar-unread-accent: #fb923c;
+  color: color-mix(in srgb, var(--session-radar-unread-accent) 82%, #ffffff);
+  background: color-mix(in srgb, var(--session-radar-unread-accent) 30%, transparent);
+  border: none;
+  box-shadow:
+    0 0 0 0 color-mix(in srgb, var(--session-radar-unread-accent) 0%, transparent);
+  animation:
+    session-radar-unread-breathe 1.95s ease-in-out infinite,
+    session-radar-unread-flash 1.15s steps(2, end) infinite;
+}
+
+.session-activity-radar-corner-badge.is-unread svg {
+  animation: session-radar-unread-icon-breathe 1.95s ease-in-out infinite;
 }
 
 .session-activity-radar-corner-badge.is-read {
-  color: #16a34a;
-  background: color-mix(in srgb, #22c55e 18%, transparent);
-  border: 1px solid color-mix(in srgb, #22c55e 40%, transparent);
+  color: color-mix(in srgb, #34d399 80%, #ffffff);
+  background: color-mix(in srgb, #22c55e 32%, transparent);
+  border: none;
+  box-shadow: none;
+}
+
+:root[data-theme="light"] .session-activity-radar-corner-badge.is-unread {
+  --session-radar-unread-accent: #2563eb;
+  color: #1d4ed8;
+  background: color-mix(in srgb, #2563eb 22%, #ffffff);
+  border-color: transparent;
+  box-shadow: 0 0 0 0 color-mix(in srgb, #2563eb 0%, transparent);
+}
+
+:root[data-theme="light"] .session-activity-radar-corner-badge.is-read {
+  color: #047857;
+  background: color-mix(in srgb, #10b981 22%, #ffffff);
+  border-color: transparent;
+  box-shadow: none;
 }
 
 .session-activity-radar-row-meta-line {
@@ -534,12 +561,55 @@
   animation: session-radar-engine-spin 0.95s linear infinite;
 }
 
+@keyframes session-radar-unread-breathe {
+  0%,
+  100% {
+    transform: scale(1);
+    box-shadow:
+      0 0 0 0 color-mix(in srgb, var(--session-radar-unread-accent, #fb923c) 0%, transparent),
+      0 0 0 color-mix(in srgb, var(--session-radar-unread-accent, #fb923c) 0%, transparent);
+  }
+  50% {
+    transform: scale(1.045);
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--session-radar-unread-accent, #fb923c) 52%, transparent),
+      0 0 12px color-mix(in srgb, var(--session-radar-unread-accent, #fb923c) 54%, transparent);
+  }
+}
+
+@keyframes session-radar-unread-flash {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.78;
+  }
+}
+
+@keyframes session-radar-unread-icon-breathe {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.08);
+  }
+}
+
 @keyframes session-radar-engine-spin {
   0% {
     transform: rotate(0deg);
   }
   100% {
     transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .session-activity-radar-corner-badge.is-unread,
+  .session-activity-radar-corner-badge.is-unread svg {
+    animation: none;
   }
 }
 

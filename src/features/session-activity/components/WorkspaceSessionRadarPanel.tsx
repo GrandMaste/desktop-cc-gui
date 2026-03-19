@@ -1,4 +1,5 @@
-import Check from "lucide-react/dist/esm/icons/check";
+import BellDot from "lucide-react/dist/esm/icons/bell-dot";
+import CheckCheck from "lucide-react/dist/esm/icons/check-check";
 import CalendarDays from "lucide-react/dist/esm/icons/calendar-days";
 import ChevronDown from "lucide-react/dist/esm/icons/chevron-down";
 import ChevronRight from "lucide-react/dist/esm/icons/chevron-right";
@@ -97,6 +98,9 @@ export function WorkspaceSessionRadarPanel({
     return "codex";
   };
 
+  const renderReadMarkerIcon = (isUnreadRecent: boolean) =>
+    isUnreadRecent ? <BellDot size={11} aria-hidden /> : <CheckCheck size={11} aria-hidden />;
+
   const renderSection = (
     sectionTitle: string,
     emptyCopyKey: "activityPanel.radar.emptyRunning" | "activityPanel.radar.emptyRecent",
@@ -143,7 +147,7 @@ export function WorkspaceSessionRadarPanel({
                         : t("activityPanel.radar.readMark")
                     }
                   >
-                    {isUnreadRecent ? t("activityPanel.radar.unreadBadge") : <Check size={10} />}
+                    {renderReadMarkerIcon(isUnreadRecent)}
                   </span>
                 ) : null}
                 <span className="session-activity-radar-row-main">
@@ -269,7 +273,7 @@ export function WorkspaceSessionRadarPanel({
                                   : t("activityPanel.radar.readMark")
                               }
                             >
-                              {isUnreadRecent ? t("activityPanel.radar.unreadBadge") : <Check size={10} />}
+                              {renderReadMarkerIcon(isUnreadRecent)}
                             </span>
                             <span className="session-activity-radar-row-main">
                               <span className="session-activity-radar-row-meta-line">
