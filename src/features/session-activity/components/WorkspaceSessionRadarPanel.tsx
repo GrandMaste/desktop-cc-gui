@@ -149,13 +149,13 @@ export function WorkspaceSessionRadarPanel({
   const renderReadMarkerIcon = (isUnreadRecent: boolean) =>
     isUnreadRecent ? <BellDot size={11} aria-hidden /> : <CheckCheck size={11} aria-hidden />;
 
-  const expandPreview = (entryId: string) => {
+  const togglePreviewAndSelectThread = (entry: SessionRadarEntry) => {
+    markEntryAsRead(entry);
     setPreviewExpandedById((current) => {
-      if (current[entryId]) {
-        return current;
-      }
-      return { ...current, [entryId]: true };
+      const nextExpanded = !current[entry.id];
+      return { ...current, [entry.id]: nextExpanded };
     });
+    onSelectThread(entry.workspaceId, entry.threadId);
   };
 
   const renderSection = (
@@ -182,11 +182,8 @@ export function WorkspaceSessionRadarPanel({
                 className={`session-activity-radar-row${entry.isProcessing ? " is-running" : ""}${
                   isUnreadRecent ? " is-unread" : ""
                 }${previewExpandedById[entry.id] ? " is-preview-expanded" : ""}`}
-                onMouseEnter={() => expandPreview(entry.id)}
-                onClick={() => {
-                  markEntryAsRead(entry);
-                  onSelectThread(entry.workspaceId, entry.threadId);
-                }}
+                onClick={() => togglePreviewAndSelectThread(entry)}
+                aria-expanded={previewExpandedById[entry.id] ? true : false}
                 aria-label={entry.threadName}
               >
                 {!entry.isProcessing ? (
@@ -334,11 +331,8 @@ export function WorkspaceSessionRadarPanel({
                             className={`session-activity-radar-row${isUnreadRecent ? " is-unread" : ""}${
                               previewExpandedById[entry.id] ? " is-preview-expanded" : ""
                             }`}
-                            onMouseEnter={() => expandPreview(entry.id)}
-                            onClick={() => {
-                              markEntryAsRead(entry);
-                              onSelectThread(entry.workspaceId, entry.threadId);
-                            }}
+                            onClick={() => togglePreviewAndSelectThread(entry)}
+                            aria-expanded={previewExpandedById[entry.id] ? true : false}
                             aria-label={entry.threadName}
                           >
                             <span

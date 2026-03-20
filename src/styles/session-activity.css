@@ -574,6 +574,7 @@
 .session-activity-radar-row-preview {
   font-size: 11px;
   color: var(--text-faint);
+  padding-left: 22px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   word-break: break-word;
