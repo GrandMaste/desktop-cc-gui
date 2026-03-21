@@ -264,6 +264,8 @@ export function KanbanBoard({
   const [editingTask, setEditingTask] = useState<KanbanTask | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [showGitPanel, setShowGitPanel] = useState(false);
+  const [visibleTaskIdsByColumn, setVisibleTaskIdsByColumn] =
+    useState<Partial<Record<KanbanTaskStatus, string[]>>>({});
 
   const handleToggleGitPanel = useCallback(() => {
     setShowGitPanel((prev) => !prev);
@@ -308,6 +310,26 @@ export function KanbanBoard({
     }
     return map;
   }, [filteredTasks, tasks]);
+
+  const handleVisibleTaskIdsChange = useCallback(
+    (columnId: KanbanTaskStatus, visibleTaskIds: string[]) => {
+      setVisibleTaskIdsByColumn((prev) => {
+        const previous = prev[columnId];
+        if (
+          previous &&
+          previous.length === visibleTaskIds.length &&
+          previous.every((taskId, idx) => taskId === visibleTaskIds[idx])
+        ) {
+          return prev;
+        }
+        return {
+          ...prev,
+          [columnId]: visibleTaskIds,
+        };
+      });
+    },
+    [],
+  );
 
   const handleDragEnd = useCallback(
     (result: DropResult) => {
@@ -367,15 +389,37 @@ export function KanbanBoard({
         });
         return;
       }
-      const destinationSlots = [...tasksByColumn[destStatus]];
-      if (sourceStatus === destStatus) {
-        const sourceTaskIndex = destinationSlots.findIndex((task) => task.id === draggableId);
-        if (sourceTaskIndex >= 0) {
-          destinationSlots.splice(sourceTaskIndex, 1);
+      const tasksById = new Map(tasks.map((task) => [task.id, task]));
+      const resolveVisibleTaskIds = (
+        status: KanbanTaskStatus,
+        options?: {
+          excludeTaskId?: string;
+        },
+      ): string[] => {
+        const columnTasks = tasksByColumn[status];
+        const columnTaskIds = new Set(columnTasks.map((task) => task.id));
+        const configuredTaskIds = visibleTaskIdsByColumn[status];
+        const baseTaskIds =
+          configuredTaskIds !== undefined
+            ? configuredTaskIds.filter((taskId) => columnTaskIds.has(taskId))
+            : columnTasks.map((task) => task.id);
+        if (!options?.excludeTaskId) {
+          return baseTaskIds;
         }
-      }
-      const beforeTask = destinationSlots[destination.index - 1];
-      const afterTask = destinationSlots[destination.index];
+        return baseTaskIds.filter((taskId) => taskId !== options.excludeTaskId);
+      };
+
+      const visibleDestinationTaskIds = resolveVisibleTaskIds(destStatus, {
+        excludeTaskId: sourceStatus === destStatus ? draggedTask.id : undefined,
+      });
+      const beforeTaskId =
+        destination.index > 0 ? (visibleDestinationTaskIds[destination.index - 1] ?? null) : null;
+      const afterTaskId =
+        destination.index < visibleDestinationTaskIds.length
+          ? (visibleDestinationTaskIds[destination.index] ?? null)
+          : null;
+      const beforeTask = beforeTaskId ? (tasksById.get(beforeTaskId) ?? null) : null;
+      const afterTask = afterTaskId ? (tasksById.get(afterTaskId) ?? null) : null;
       const beforeGroupId = beforeTask ? resolveTaskGroupId(beforeTask.id) : null;
       const afterGroupId = afterTask ? resolveTaskGroupId(afterTask.id) : null;
       const slotGroupId =
@@ -394,15 +438,23 @@ export function KanbanBoard({
       }
 
       const destTasks = [...tasksByColumn[destStatus]];
-
-      if (source.droppableId !== destination.droppableId) {
-        destTasks.splice(destination.index, 0, draggedTask);
-      } else {
-        const [moved] = destTasks.splice(source.index, 1);
-        if (moved) {
-          destTasks.splice(destination.index, 0, moved);
+      const existingDestinationIndex = destTasks.findIndex((task) => task.id === draggableId);
+      if (existingDestinationIndex >= 0) {
+        destTasks.splice(existingDestinationIndex, 1);
+      }
+      let destinationInsertIndex = destTasks.length;
+      if (afterTaskId) {
+        const afterIndex = destTasks.findIndex((task) => task.id === afterTaskId);
+        if (afterIndex >= 0) {
+          destinationInsertIndex = afterIndex;
+        }
+      } else if (beforeTaskId) {
+        const beforeIndex = destTasks.findIndex((task) => task.id === beforeTaskId);
+        if (beforeIndex >= 0) {
+          destinationInsertIndex = beforeIndex + 1;
         }
       }
+      destTasks.splice(destinationInsertIndex, 0, draggedTask);
 
       destTasks.forEach((task, idx) => {
         const newSortOrder = (idx + 1) * 1000;
@@ -459,7 +511,7 @@ export function KanbanBoard({
         onDragToInProgress(draggedTask);
       }
     },
-    [tasksByColumn, tasks, onReorderTask, onDragToInProgress, onUpdateTask]
+    [tasksByColumn, tasks, onReorderTask, onDragToInProgress, onUpdateTask, visibleTaskIdsByColumn]
   );
 
   const handleOpenCreate = (status: KanbanTaskStatus = "todo") => {
@@ -610,6 +662,7 @@ export function KanbanBoard({
                   onCancelOrBlockTask={handleCancelOrBlockTask}
                   onSelectTask={onSelectTask}
                   onEditTask={col.id === "todo" ? handleEditTask : undefined}
+                  onVisibleTaskIdsChange={handleVisibleTaskIdsChange}
                 />
               ))}
             </div>

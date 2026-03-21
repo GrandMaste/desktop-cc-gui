@@ -1,8 +1,8 @@
-import { Fragment, useMemo, useState, type CSSProperties } from "react";
+import { Fragment, useEffect, useMemo, useState, type CSSProperties } from "react";
 import { useTranslation } from "react-i18next";
 import { Droppable } from "@hello-pangea/dnd";
 import { ChevronDown, ChevronRight, Plus } from "lucide-react";
-import type { KanbanColumnDef, KanbanTask } from "../types";
+import type { KanbanColumnDef, KanbanTask, KanbanTaskStatus } from "../types";
 import { KanbanCard } from "./KanbanCard";
 import { chainPositionOfTask } from "../utils/chaining";
 
@@ -18,6 +18,7 @@ type KanbanColumnProps = {
   onCancelOrBlockTask: (task: KanbanTask) => void;
   onSelectTask: (task: KanbanTask) => void;
   onEditTask?: (task: KanbanTask) => void;
+  onVisibleTaskIdsChange?: (columnId: KanbanTaskStatus, taskIds: string[]) => void;
 };
 
 type TaskGroupKind = "recurring" | "chain";
@@ -147,6 +148,7 @@ export function KanbanColumn({
   onCancelOrBlockTask,
   onSelectTask,
   onEditTask,
+  onVisibleTaskIdsChange,
 }: KanbanColumnProps) {
   const { t } = useTranslation();
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
@@ -287,6 +289,31 @@ export function KanbanColumn({
     );
     return [...groupedBlocks, ...singleBlocks];
   }, [tasks, allTasks]);
+
+  const visibleTaskIds = useMemo(() => {
+    const ids: string[] = [];
+    for (const block of renderBlocks) {
+      if (block.type === "single") {
+        ids.push(block.task.id);
+        continue;
+      }
+      const defaultCollapsed = column.id === "testing" || column.id === "done";
+      const isCollapsed = collapsedGroups[block.meta.key] ?? defaultCollapsed;
+      if (!isCollapsed) {
+        for (const task of block.tasks) {
+          ids.push(task.id);
+        }
+      }
+    }
+    return ids;
+  }, [column.id, collapsedGroups, renderBlocks]);
+
+  useEffect(() => {
+    if (!onVisibleTaskIdsChange) {
+      return;
+    }
+    onVisibleTaskIdsChange(column.id, visibleTaskIds);
+  }, [column.id, onVisibleTaskIdsChange, visibleTaskIds]);
 
   return (
     <div className="kanban-column">

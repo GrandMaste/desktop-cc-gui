@@ -183,6 +183,10 @@ export function resolveChainedDragBlockedReason(
   }
   const isHeadInChain = !task.chain?.previousTaskId;
 
+  if (sourceStatus === "done" && destinationStatus === "todo") {
+    return "chain_completed_cannot_back_to_todo";
+  }
+
   if (sourceStatus === "done" && destinationStatus !== "done") {
     return "chain_completed_status_locked";
   }

@@ -189,7 +189,9 @@ describe("kanban chaining utils", () => {
       chain: { groupId: "A", previousTaskId: "A" },
       execution: { startedAt: 1000, finishedAt: 2000 },
     });
-    expect(resolveChainedDragBlockedReason(task, "done", "todo")).toBe("chain_completed_status_locked");
+    expect(resolveChainedDragBlockedReason(task, "done", "todo")).toBe(
+      "chain_completed_cannot_back_to_todo",
+    );
   });
 
   it("blocks completed chain head dragging back to todo", () => {

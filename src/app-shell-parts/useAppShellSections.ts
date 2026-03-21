@@ -39,6 +39,7 @@ import type { KanbanContextMode } from "../features/kanban/utils/contextMode";
 
 const KANBAN_TAG_REGEX = /&@[^\s]+/g;
 const KANBAN_SCHEDULER_INTERVAL_MS = 20_000;
+const KANBAN_EXECUTION_LOCK_STALE_MS = 120_000;
 
 export function stripComposerKanbanTagsPreserveFormatting(text: string): string {
   if (!text || !text.includes("&@")) {
@@ -803,6 +804,7 @@ export function useAppShellSections(ctx: any) {
       if (!task) {
         return { ok: false, reason: "task_not_found" };
       }
+      let launchedSuccessfully = false;
       if (params.source !== "chained" && task.chain?.previousTaskId) {
         setTaskChainBlockedReason(task.id, "chain_requires_head_trigger");
         updateTaskExecution(task.id, {
@@ -890,6 +892,7 @@ export function useAppShellSections(ctx: any) {
           startedAt: executionStartedAt,
           finishedAt: null,
         });
+        launchedSuccessfully = true;
         return { ok: true, threadId };
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
@@ -900,7 +903,9 @@ export function useAppShellSections(ctx: any) {
         });
         return { ok: false, reason };
       } finally {
-        delete kanbanExecutionLocksRef.current[task.id];
+        if (!launchedSuccessfully) {
+          delete kanbanExecutionLocksRef.current[task.id];
+        }
       }
     },
     [
@@ -1138,7 +1143,25 @@ export function useAppShellSections(ctx: any) {
   useEffect(() => {
     const runSchedulerTick = () => {
       const nowTs = Date.now();
+      const activeTaskIds = new Set(kanbanTasksRef.current.map((entry) => entry.id));
+      for (const taskId of Object.keys(kanbanExecutionLocksRef.current)) {
+        if (activeTaskIds.has(taskId)) {
+          continue;
+        }
+        delete kanbanExecutionLocksRef.current[taskId];
+      }
       for (const task of kanbanTasksRef.current) {
+        const runtimeLock = kanbanExecutionLocksRef.current[task.id];
+        if (runtimeLock) {
+          const hasPersistedExecutionLock = Boolean(task.execution?.lock);
+          const isLockExpired = nowTs - runtimeLock.acquiredAt > KANBAN_EXECUTION_LOCK_STALE_MS;
+          if (!hasPersistedExecutionLock || task.status !== "todo" || isLockExpired) {
+            delete kanbanExecutionLocksRef.current[task.id];
+            if (task.execution?.lock) {
+              updateTaskExecution(task.id, { lock: null });
+            }
+          }
+        }
         if (task.execution?.blockedReason === "scheduled_trigger_blocked") {
           updateTaskExecution(task.id, { blockedReason: null });
         }
@@ -1191,6 +1214,47 @@ export function useAppShellSections(ctx: any) {
 
         if (!isScheduleDue(effectiveSchedule, nowTs)) {
           continue;
+        }
+
+        if (
+          effectiveSchedule.mode === "recurring" &&
+          effectiveSchedule.recurringExecutionMode === "new_thread"
+        ) {
+          const recurringSeriesId =
+            typeof effectiveSchedule.seriesId === "string" && effectiveSchedule.seriesId.trim().length > 0
+              ? effectiveSchedule.seriesId.trim()
+              : task.id;
+          const hasSiblingExecuting = kanbanTasksRef.current.some((entry) => {
+            if (entry.id === task.id) {
+              return false;
+            }
+            const siblingSchedule = entry.schedule;
+            if (
+              !siblingSchedule ||
+              siblingSchedule.mode !== "recurring" ||
+              siblingSchedule.recurringExecutionMode !== "new_thread"
+            ) {
+              return false;
+            }
+            const siblingSeriesId =
+              typeof siblingSchedule.seriesId === "string" && siblingSchedule.seriesId.trim().length > 0
+                ? siblingSchedule.seriesId.trim()
+                : entry.id;
+            if (siblingSeriesId !== recurringSeriesId) {
+              return false;
+            }
+            return (
+              entry.status === "inprogress" ||
+              Boolean(kanbanExecutionLocksRef.current[entry.id])
+            );
+          });
+          if (hasSiblingExecuting) {
+            updateTaskExecution(task.id, {
+              lastSource: "scheduled",
+              blockedReason: "scheduled_trigger_blocked",
+            });
+            continue;
+          }
         }
 
         if (effectiveSchedule.mode === "recurring" && hasReachedRecurringRoundLimit(effectiveSchedule)) {
@@ -1391,24 +1455,47 @@ export function useAppShellSections(ctx: any) {
               },
             });
             if (!reachedRoundLimit) {
-              kanbanCreateTask({
-                workspaceId: task.workspaceId,
-                panelId: task.panelId,
-                title: task.title,
-                description: task.description,
-                engineType: task.engineType,
-                modelId: task.modelId,
-                branchName: task.branchName,
-                images: task.images ?? [],
-                autoStart: false,
-                schedule: completedSchedule,
-                chain: task.chain
-                  ? {
-                      ...task.chain,
-                      blockedReason: null,
-                    }
-                  : undefined,
+              const hasPendingSeriesTask = recurringSiblings.some((sibling) => {
+                if (sibling.id === task.id) {
+                  return false;
+                }
+                const siblingSchedule = sibling.schedule;
+                if (
+                  !siblingSchedule ||
+                  siblingSchedule.mode !== "recurring" ||
+                  siblingSchedule.recurringExecutionMode !== "new_thread"
+                ) {
+                  return false;
+                }
+                const siblingSeriesId =
+                  typeof siblingSchedule.seriesId === "string" && siblingSchedule.seriesId.trim().length > 0
+                    ? siblingSchedule.seriesId.trim()
+                    : sibling.id;
+                if (siblingSeriesId !== recurringSeriesId) {
+                  return false;
+                }
+                return sibling.status === "todo" || sibling.status === "inprogress";
               });
+              if (!hasPendingSeriesTask) {
+                kanbanCreateTask({
+                  workspaceId: task.workspaceId,
+                  panelId: task.panelId,
+                  title: task.title,
+                  description: task.description,
+                  engineType: task.engineType,
+                  modelId: task.modelId,
+                  branchName: task.branchName,
+                  images: task.images ?? [],
+                  autoStart: false,
+                  schedule: completedSchedule,
+                  chain: task.chain
+                    ? {
+                        ...task.chain,
+                        blockedReason: null,
+                      }
+                    : undefined,
+                });
+              }
             } else {
               updateTaskExecution(task.id, {
                 lastSource: completionSource,
