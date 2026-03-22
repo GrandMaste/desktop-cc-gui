@@ -15,11 +15,13 @@ English:
 - Refine workspace project dropdown visuals and complete worktree list rendering
 - Integrate OpenApp button into main header and improve project-area hover visibility interactions
 - Add desktop topbar session tabs with global recent-session switching/closing workflow
+- Add `/context` command and `<image>` tag parsing/rendering in chat for richer context-injection and multimodal flows
 
 🔧 Improvements
 - Add `windows-latest` doctor + integration CI gate for stronger cross-platform release confidence
 - Harden Windows compatibility checks by making lint/runtime contract `no-undef` verification Windows-safe
 - Refine main-header layout composition for session tabs while keeping sidebar topbar compact
+- Split oversized Claude/message modules to satisfy large-file governance gate and improve maintainability
 
 🐛 Fixes
 - Fix scheduler lock contention and drag-sort anomalies under filtered Kanban views
@@ -29,6 +31,8 @@ English:
 - Fix non-Windows title-bar drag behavior and fullscreen boundary handling
 - Stabilize cross-platform tab eviction ordering by replacing locale-based tie-break with code-unit comparison
 - Expand keyboard activation compatibility for session tabs (`Space`, ` `, `Spacebar`, `Enter`)
+- Fix AskUserQuestion rendering inconsistency between live updates and history replay
+- Fix AskUserInput multi-select parsing path to remove lint blocking and stabilize tool-event handling
 
 中文：
 
@@ -41,11 +45,13 @@ English:
 - 优化工作区项目下拉外观并补全工作树列表渲染
 - 在主标题区融合 OpenApp 按钮并增强项目区域悬停显隐交互
 - 新增桌面端顶部会话标签，支持最近会话全局切换与关闭
+- 新增 `/context` 命令与 `<image>` 标签解析渲染，增强上下文注入与多模态消息链路
 
 🔧 Improvements
 - 新增 `windows-latest` 的 doctor + integration CI 门禁，提升跨平台发布稳定性
 - 调整 lint/运行时契约 `no-undef` 校验为 Windows 兼容实现
 - 优化主标题区布局编排，兼容顶部会话标签并保持侧栏顶部区域紧凑
+- 拆分 Claude/消息相关大文件，满足 large-file 治理门禁并提升可维护性
 
 🐛 Fixes
 - 修复过滤视图下调度锁竞争与拖拽排序异常
@@ -55,6 +61,8 @@ English:
 - 修复非 Windows 场景标题栏拖拽异常与全屏边界处理
 - 修复标签淘汰 tie-break 的 locale 依赖问题，统一为 code-unit 比较确保 Win/mac 一致
 - 修复会话标签键盘激活兼容性，补齐 `Space`/空格字符/`Spacebar`/`Enter`
+- 修复 AskUserQuestion 在实时更新与历史回放中的渲染不一致
+- 修复 AskUserInput multi-select 解析链路，解除 lint 阻塞并稳定工具事件处理
 
 ---
 
