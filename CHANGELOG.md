@@ -33,6 +33,7 @@ English:
 - Expand keyboard activation compatibility for session tabs (`Space`, ` `, `Spacebar`, `Enter`)
 - Fix AskUserQuestion rendering inconsistency between live updates and history replay
 - Fix AskUserInput multi-select parsing path to remove lint blocking and stabilize tool-event handling
+- Fix Windows external image drag-drop in Composer by normalizing high-DPI drop coordinates, routing image paths to attachments, and hardening hook hot-reload stability
 
 中文：
 
@@ -63,6 +64,7 @@ English:
 - 修复会话标签键盘激活兼容性，补齐 `Space`/空格字符/`Spacebar`/`Enter`
 - 修复 AskUserQuestion 在实时更新与历史回放中的渲染不一致
 - 修复 AskUserInput multi-select 解析链路，解除 lint 阻塞并稳定工具事件处理
+- 修复 Composer 在 Windows 外部图片拖拽场景下无法稳定落入的问题：补齐高 DPI 坐标归一化、图片路径按附件处理，并加固 Hook 热更新稳定性
 
 ---
 
