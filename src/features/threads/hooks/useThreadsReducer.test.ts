@@ -1327,6 +1327,150 @@ describe("threadReducer", () => {
     expect(next.itemsByThread["claude:session-a"]).toBeUndefined();
   });
 
+  it("accepts gemini reasoning deltas even after processing settles", () => {
+    const settledState: ThreadState = {
+      ...initialState,
+      threadStatusById: {
+        "gemini:session-a": {
+          isProcessing: false,
+          hasUnread: false,
+          isReviewing: false,
+          isContextCompacting: false,
+          processingStartedAt: null,
+          lastDurationMs: null,
+          heartbeatPulse: 0,
+        },
+      },
+      activeTurnIdByThread: {
+        "gemini:session-a": null,
+      },
+    };
+
+    const next = threadReducer(settledState, {
+      type: "appendReasoningContent",
+      threadId: "gemini:session-a",
+      itemId: "reasoning-late-1",
+      delta: "late reasoning from fallback",
+    });
+
+    const item = next.itemsByThread["gemini:session-a"]?.[0];
+    expect(item?.kind).toBe("reasoning");
+    if (item?.kind === "reasoning") {
+      expect(item.id).toBe("reasoning-late-1");
+      expect(item.content).toBe("late reasoning from fallback");
+    }
+  });
+
+  it("inserts late gemini reasoning before the latest assistant answer", () => {
+    const settledState: ThreadState = {
+      ...initialState,
+      itemsByThread: {
+        "gemini:session-order": [
+          {
+            id: "user-1",
+            kind: "message",
+            role: "user",
+            text: "这个网站是什么",
+          },
+          {
+            id: "assistant-1",
+            kind: "message",
+            role: "assistant",
+            text: "这是一个本地项目目录。",
+          },
+        ],
+      },
+      threadStatusById: {
+        "gemini:session-order": {
+          isProcessing: false,
+          hasUnread: false,
+          isReviewing: false,
+          isContextCompacting: false,
+          processingStartedAt: null,
+          lastDurationMs: 980,
+          heartbeatPulse: 0,
+        },
+      },
+      activeTurnIdByThread: {
+        "gemini:session-order": null,
+      },
+    };
+
+    const next = threadReducer(settledState, {
+      type: "appendReasoningContent",
+      threadId: "gemini:session-order",
+      itemId: "reasoning-late-order-1",
+      delta: "先确认目录结构，再给出解释。",
+    });
+
+    const items = next.itemsByThread["gemini:session-order"] ?? [];
+    expect(items).toHaveLength(3);
+    expect(items[0]?.id).toBe("user-1");
+    expect(items[1]?.kind).toBe("reasoning");
+    if (items[1]?.kind === "reasoning") {
+      expect(items[1].id).toBe("reasoning-late-order-1");
+      expect(items[1].content).toBe("先确认目录结构，再给出解释。");
+    }
+    expect(items[2]?.kind).toBe("message");
+    if (items[2]?.kind === "message") {
+      expect(items[2].role).toBe("assistant");
+      expect(items[2].id).toBe("assistant-1");
+    }
+  });
+
+  it("keeps gemini reasoning in arrival order while the turn is still active", () => {
+    const liveState: ThreadState = {
+      ...initialState,
+      itemsByThread: {
+        "gemini:session-live-order": [
+          {
+            id: "user-1",
+            kind: "message",
+            role: "user",
+            text: "继续",
+          },
+          {
+            id: "assistant-1",
+            kind: "message",
+            role: "assistant",
+            text: "先看目录",
+          },
+        ],
+      },
+      threadStatusById: {
+        "gemini:session-live-order": {
+          isProcessing: false,
+          hasUnread: false,
+          isReviewing: false,
+          isContextCompacting: false,
+          processingStartedAt: null,
+          lastDurationMs: null,
+          heartbeatPulse: 1,
+        },
+      },
+      activeTurnIdByThread: {
+        "gemini:session-live-order": "gemini-turn-live-1",
+      },
+    };
+
+    const next = threadReducer(liveState, {
+      type: "appendReasoningContent",
+      threadId: "gemini:session-live-order",
+      itemId: "reasoning-live-order-1",
+      delta: "先确认项目结构，再继续回复。",
+    });
+
+    const items = next.itemsByThread["gemini:session-live-order"] ?? [];
+    expect(items).toHaveLength(3);
+    expect(items[0]?.id).toBe("user-1");
+    expect(items[1]?.id).toBe("assistant-1");
+    expect(items[2]?.kind).toBe("reasoning");
+    if (items[2]?.kind === "reasoning") {
+      expect(items[2].id).toBe("reasoning-live-order-1");
+      expect(items[2].content).toBe("先确认项目结构，再继续回复。");
+    }
+  });
+
   it("accepts claude reasoning deltas while processing", () => {
     const processingState: ThreadState = {
       ...initialState,
