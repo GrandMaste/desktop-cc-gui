@@ -967,7 +967,7 @@ export function AppShell() {
     const engineSelection = engineSelectedModelIdByType[activeEngine] ?? null;
     if (engineModelsAsOptions.length === 0) {
       if (activeEngine === "claude") {
-        return engineSelection ?? "claude-sonnet-4-6";
+        return engineSelection;
       }
       return engineSelection;
     }

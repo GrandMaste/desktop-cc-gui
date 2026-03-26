@@ -128,7 +128,7 @@ export const ChatInputBox = memo(forwardRef<ChatInputBoxHandle, ChatInputBoxProp
     {
       showHeader = true,
       isLoading = false,
-      selectedModel = 'claude-sonnet-4-6',
+      selectedModel = '',
       models,
       permissionMode = 'bypassPermissions',
       currentProvider = 'claude',

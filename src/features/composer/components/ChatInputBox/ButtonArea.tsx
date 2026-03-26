@@ -99,7 +99,7 @@ export const ButtonArea = ({
   disabled = false,
   hasInputContent = false,
   isLoading = false,
-  selectedModel = 'claude-sonnet-4-6',
+  selectedModel = '',
   models,
   permissionMode = 'bypassPermissions',
   currentProvider = 'claude',
@@ -177,13 +177,15 @@ export const ButtonArea = ({
    * Maps base model IDs to actual model names (e.g., versions with capacity suffixes)
    */
   const applyModelMapping = useCallback((model: ModelInfo, mapping: { haiku?: string; sonnet?: string; opus?: string }): ModelInfo => {
-    const modelKeyMap: Record<string, keyof typeof mapping> = {
-      'claude-sonnet-4-6': 'sonnet',
-      'claude-opus-4-6': 'opus',
-      'claude-haiku-4-5': 'haiku',
-    };
-
-    const key = modelKeyMap[model.id];
+    const normalizedId = model.id.toLowerCase();
+    const key =
+      normalizedId.includes('haiku')
+        ? 'haiku'
+        : normalizedId.includes('sonnet')
+          ? 'sonnet'
+          : normalizedId.includes('opus')
+            ? 'opus'
+            : undefined;
     if (key && mapping[key]) {
       const actualModel = String(mapping[key]).trim();
       if (actualModel.length > 0) {
@@ -238,12 +240,14 @@ export const ButtonArea = ({
       const filteredBuiltIn = CODEX_MODELS.filter(m => !customIds.has(m.id));
       return [...customModels, ...filteredBuiltIn];
     }
+    const dynamicClaudeModels = Array.isArray(models) ? models : [];
+    const baseClaudeModels = dynamicClaudeModels.length > 0 ? dynamicClaudeModels : CLAUDE_MODELS;
     if (typeof window === 'undefined' || !window.localStorage) {
-      return CLAUDE_MODELS;
+      return baseClaudeModels;
     }
 
-    // Apply model mapping to built-in models
-    let builtInModels = CLAUDE_MODELS;
+    // Apply model mapping to base Claude models
+    let builtInModels = baseClaudeModels;
     try {
       const stored = window.localStorage.getItem(STORAGE_KEYS.CLAUDE_MODEL_MAPPING);
       if (stored) {
@@ -253,7 +257,7 @@ export const ButtonArea = ({
           sonnet?: string;
           opus?: string;
         };
-        builtInModels = CLAUDE_MODELS.map((m) => applyModelMapping(m, mapping));
+        builtInModels = baseClaudeModels.map((m) => applyModelMapping(m, mapping));
       }
     } catch {
       // ignore

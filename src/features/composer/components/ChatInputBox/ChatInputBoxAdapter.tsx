@@ -581,7 +581,7 @@ export const ChatInputBoxAdapter = forwardRef<ChatInputBoxHandle, ChatInputBoxAd
       if (models && models.length > 0) {
         return models[0]?.id ?? '';
       }
-      return selectedEngine === 'claude' ? 'claude-sonnet-4-6' : '';
+      return '';
     }, [models, selectedEngine, selectedModelId]);
 
     // Expose ChatInputBoxHandle to parent
