@@ -55,6 +55,7 @@ import { useReviewPrompt } from "./useReviewPrompt";
 import { formatRelativeTime } from "../../../utils/time";
 import { pushErrorToast } from "../../../services/toasts";
 import { normalizeSpecRootInput } from "../../spec/pathUtils";
+import { isValidModelId } from "../../composer/types/provider";
 
 type SendMessageOptions = {
   skipPromptExpansion?: boolean;
@@ -160,6 +161,14 @@ function isLikelyForeignModelForGemini(modelId: string): boolean {
     || normalized.startsWith("meta/")
     || normalized.startsWith("mistral/")
   );
+}
+
+function isValidClaudeModelForPassthrough(modelId: string): boolean {
+  const normalized = modelId.trim();
+  if (!normalized) {
+    return false;
+  }
+  return isValidModelId(normalized);
 }
 
 function resolveWorkspaceSpecRoot(workspaceId: string): string | null {
@@ -777,7 +786,7 @@ export function useThreadMessaging({
       const sanitizedModel =
         resolvedEngine === "claude" &&
         resolvedModel &&
-        !resolvedModel.startsWith("claude-")
+        !isValidClaudeModelForPassthrough(resolvedModel)
           ? null
           : resolvedEngine === "codex" &&
               resolvedModel &&
@@ -823,13 +832,13 @@ export function useThreadMessaging({
           source: "client",
           label: "model/sanitize",
           payload: {
-            reason: "non-claude-model",
+            reason: "invalid-claude-model",
             model: resolvedModel,
           },
         });
         if (import.meta.env.DEV) {
           console.warn("[model/sanitize]", {
-            reason: "non-claude-model",
+            reason: "invalid-claude-model",
             model: resolvedModel,
           });
         }

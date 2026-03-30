@@ -286,6 +286,113 @@ describe("useThreadMessaging", () => {
     );
   });
 
+  it("keeps custom claude model ids for claude engine", async () => {
+    const { result } = makeHook("claude");
+
+    await act(async () => {
+      await result.current.sendUserMessageToThread(
+        workspace,
+        "thread-1",
+        "hello claude",
+        [],
+        { model: "GLM-5.1" },
+      );
+    });
+
+    expect(engineSendMessage).toHaveBeenCalledWith(
+      "ws-1",
+      expect.objectContaining({
+        engine: "claude",
+        model: "GLM-5.1",
+      }),
+    );
+  });
+
+  it("keeps custom claude model ids with slash/colon/brackets for claude engine", async () => {
+    const { result } = makeHook("claude");
+
+    await act(async () => {
+      await result.current.sendUserMessageToThread(
+        workspace,
+        "thread-1",
+        "hello claude",
+        [],
+        { model: "provider/model:202603[beta]" },
+      );
+    });
+
+    expect(engineSendMessage).toHaveBeenCalledWith(
+      "ws-1",
+      expect.objectContaining({
+        engine: "claude",
+        model: "provider/model:202603[beta]",
+      }),
+    );
+  });
+
+  it("sanitizes invalid claude model ids for claude engine", async () => {
+    const { result, onDebug } = makeHook("claude");
+
+    await act(async () => {
+      await result.current.sendUserMessageToThread(
+        workspace,
+        "thread-1",
+        "hello claude",
+        [],
+        { model: "bad model with spaces" },
+      );
+    });
+
+    expect(engineSendMessage).toHaveBeenCalledWith(
+      "ws-1",
+      expect.objectContaining({
+        engine: "claude",
+        model: null,
+      }),
+    );
+    expect(onDebug).toHaveBeenCalledWith(
+      expect.objectContaining({
+        label: "model/sanitize",
+        payload: expect.objectContaining({
+          reason: "invalid-claude-model",
+          model: "bad model with spaces",
+        }),
+      }),
+    );
+  });
+
+  it("sanitizes overlong claude model ids for claude engine", async () => {
+    const { result, onDebug } = makeHook("claude");
+    const overlongModelId = `m${"x".repeat(128)}`;
+
+    await act(async () => {
+      await result.current.sendUserMessageToThread(
+        workspace,
+        "thread-1",
+        "hello claude",
+        [],
+        { model: overlongModelId },
+      );
+    });
+
+    expect(engineSendMessage).toHaveBeenCalledWith(
+      "ws-1",
+      expect.objectContaining({
+        engine: "claude",
+        model: null,
+      }),
+    );
+    expect(onDebug).toHaveBeenCalledWith(
+      expect.objectContaining({
+        label: "model/sanitize",
+        payload: expect.objectContaining({
+          reason: "invalid-claude-model",
+          model: overlongModelId,
+        }),
+      }),
+    );
+  });
+
   it("sanitizes leaked codex default model for gemini", async () => {
     const { result } = makeHook("gemini");
 

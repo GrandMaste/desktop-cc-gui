@@ -61,6 +61,7 @@ import { useDictationController } from "./features/app/hooks/useDictationControl
 import { useComposerController } from "./features/app/hooks/useComposerController";
 import { useComposerInsert } from "./features/app/hooks/useComposerInsert";
 import { useEngineController } from "./features/engine/hooks/useEngineController";
+import { resolveClaudePendingThreadModelRefreshKey } from "./features/engine/utils/claudeModelRefresh";
 import { useRenameThreadPrompt } from "./features/threads/hooks/useRenameThreadPrompt";
 import { useDeleteThreadPrompt } from "./features/threads/hooks/useDeleteThreadPrompt";
 import { useWorktreePrompt } from "./features/workspaces/hooks/useWorktreePrompt";
@@ -654,6 +655,7 @@ export function AppShell() {
     setActiveEngine,
     engineModelsAsOptions,
     engineStatuses,
+    refreshEngines,
   } = useEngineController({ activeWorkspace, onDebug: addDebugEntry });
   const [openCodeAgents, setOpenCodeAgents] = useState<OpenCodeAgentOption[]>([]);
   const [openCodeAgentByThreadId, setOpenCodeAgentByThreadId] = useState<Record<string, string | null>>({});
@@ -1270,6 +1272,31 @@ export function AppShell() {
     resolveCollaborationRuntimeMode,
     onCollaborationModeResolved: handleCollaborationModeResolved,
   });
+  const claudeModelRefreshThreadKeyRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    const refreshKey = resolveClaudePendingThreadModelRefreshKey({
+      activeEngine,
+      activeThreadId,
+      activeWorkspaceId,
+    });
+    if (!refreshKey) {
+      return;
+    }
+    if (claudeModelRefreshThreadKeyRef.current === refreshKey) {
+      return;
+    }
+    claudeModelRefreshThreadKeyRef.current = refreshKey;
+    addDebugEntry({
+      id: `${Date.now()}-claude-model-refresh-on-new-thread`,
+      timestamp: Date.now(),
+      source: "client",
+      label: "engine/models refresh on new claude thread",
+      payload: { workspaceId: activeWorkspaceId, threadId: activeThreadId },
+    });
+    void refreshEngines();
+  }, [activeEngine, activeThreadId, activeWorkspaceId, addDebugEntry, refreshEngines]);
+
   const handleUserInputSubmitWithPlanApply = useCallback(
     async (
       request: RequestUserInputRequest,

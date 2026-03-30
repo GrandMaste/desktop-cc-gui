@@ -22,6 +22,7 @@ import {
 } from "../../models/constants";
 import {
   STORAGE_KEYS as PROVIDER_STORAGE_KEYS,
+  isValidModelId,
   validateCodexCustomModels,
 } from "../../composer/types/provider";
 
@@ -161,13 +162,40 @@ function readCustomClaudeModels(): EngineModelInfo[] {
       return [];
     }
     const parsed = JSON.parse(raw);
-    const models = validateCodexCustomModels(parsed);
-    return models.map((model) => ({
-      id: model.id,
-      displayName: model.label?.trim() || model.id,
-      description: model.description?.trim() ?? "",
-      isDefault: false,
-    }));
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    const seenIds = new Set<string>();
+    const models: EngineModelInfo[] = [];
+    for (const entry of parsed) {
+      if (!entry || typeof entry !== "object") {
+        continue;
+      }
+      const idValue = (entry as { id?: unknown }).id;
+      if (typeof idValue !== "string") {
+        continue;
+      }
+      const id = idValue.trim();
+      if (!isValidModelId(id) || seenIds.has(id)) {
+        continue;
+      }
+      const labelValue = (entry as { label?: unknown }).label;
+      const descriptionValue = (entry as { description?: unknown }).description;
+      models.push({
+        id,
+        displayName:
+          typeof labelValue === "string" && labelValue.trim().length > 0
+            ? labelValue.trim()
+            : id,
+        description:
+          typeof descriptionValue === "string"
+            ? descriptionValue.trim()
+            : "",
+        isDefault: false,
+      });
+      seenIds.add(id);
+    }
+    return models;
   } catch {
     return [];
   }
