@@ -350,20 +350,24 @@ function isLikelyAgentDisplayName(value: string | null): boolean {
   if (value.length > 24) {
     return false;
   }
-  return !/[。！？!?,，；;：:]/.test(value);
+  return !/[。！？!?]/.test(value) && !/[,:，；;：]/.test(value);
 }
 
 function stripAgentPromptBlockFromUserText(
   text: string,
   fallbackAgentName: string | null,
-): { text: string; selectedAgentName: string | null } {
+): {
+  text: string;
+  selectedAgentName: string | null;
+  hasInjectedAgentPromptBlock: boolean;
+} {
   const match = AGENT_PROMPT_BLOCK_AT_TAIL_REGEX.exec(text);
   if (!match || typeof match.index !== "number" || match.index < 0) {
-    return { text, selectedAgentName: null };
+    return { text, selectedAgentName: null, hasInjectedAgentPromptBlock: false };
   }
   const tailText = match[1] ?? "";
   if (!tailText.trim()) {
-    return { text, selectedAgentName: null };
+    return { text, selectedAgentName: null, hasInjectedAgentPromptBlock: false };
   }
   const inferredAgentName = normalizeSelectedAgentName(
     tailText
@@ -372,16 +376,17 @@ function stripAgentPromptBlockFromUserText(
       .find((line) => line.length > 0) ?? null,
   );
   const agentName = fallbackAgentName ?? inferredAgentName;
-  if (!agentName || (!fallbackAgentName && !isLikelyAgentDisplayName(inferredAgentName))) {
-    return { text, selectedAgentName: null };
-  }
   const baseText = text.slice(0, match.index).replace(/\s+$/, "");
   if (!baseText) {
-    return { text, selectedAgentName: null };
+    return { text, selectedAgentName: null, hasInjectedAgentPromptBlock: false };
   }
   return {
     text: baseText,
-    selectedAgentName: agentName,
+    selectedAgentName:
+      fallbackAgentName || isLikelyAgentDisplayName(inferredAgentName)
+        ? agentName
+        : null,
+    hasInjectedAgentPromptBlock: true,
   };
 }
 
@@ -1449,6 +1454,7 @@ const MessageRow = memo(function MessageRow({
         displayText: memorySummary ? "" : originalText,
         selectedAgentName: null,
         selectedAgentIcon: null,
+        hasInjectedAgentPromptBlock: false,
       };
     }
     const normalizedSelectedAgentName = normalizeSelectedAgentName(item.selectedAgentName);
@@ -1466,6 +1472,7 @@ const MessageRow = memo(function MessageRow({
         strippedAgentPrompt.selectedAgentName
         ?? normalizedSelectedAgentName,
       selectedAgentIcon: normalizeSelectedAgentIcon(item.selectedAgentIcon),
+      hasInjectedAgentPromptBlock: strippedAgentPrompt.hasInjectedAgentPromptBlock,
     };
   }, [
     enableCollaborationBadge,
@@ -1479,7 +1486,9 @@ const MessageRow = memo(function MessageRow({
   const displayText = userMessagePresentation.displayText;
   const selectedAgentName = userMessagePresentation.selectedAgentName;
   const selectedAgentIcon = userMessagePresentation.selectedAgentIcon;
-  const hasExternalAgentBadge = item.role === "user" && Boolean(selectedAgentName);
+  const hasInjectedAgentPromptBlock = userMessagePresentation.hasInjectedAgentPromptBlock;
+  const hasExternalAgentBadge =
+    item.role === "user" && (Boolean(selectedAgentName) || hasInjectedAgentPromptBlock);
   useEffect(() => {
     setIsAgentBadgeExpanded(false);
   }, [item.id, selectedAgentIcon, selectedAgentName]);
@@ -1599,12 +1608,12 @@ const MessageRow = memo(function MessageRow({
         className="message-agent-icon-button"
         onClick={handleToggleAgentBadge}
         aria-expanded={isAgentBadgeExpanded}
-        aria-label={selectedAgentName ? `显示智能体标签：${selectedAgentName}` : "显示智能体标签"}
+        aria-label={selectedAgentName ? `显示智能体标签：${selectedAgentName}` : "显示智能体标记"}
         title={selectedAgentName ?? undefined}
       >
         <AgentIcon
           icon={selectedAgentIcon}
-          seed={selectedAgentName}
+          seed={selectedAgentName ?? item.id}
           fallback="codicon-hubot"
           className="message-agent-icon-glyph"
           size={30}

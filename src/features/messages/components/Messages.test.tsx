@@ -211,7 +211,7 @@ describe("Messages", () => {
     expect(container.textContent ?? "").not.toContain("你是一个专注前端体验的专家");
   });
 
-  it("does not strip user-authored agent header block when no reliable agent name is present", () => {
+  it("strips injected agent prompt block even when fallback metadata is missing", () => {
     const items: ConversationItem[] = [
       {
         id: "msg-agent-header-user-authored",
@@ -234,9 +234,10 @@ describe("Messages", () => {
     );
 
     const userText = container.querySelector(".user-collapsible-text-content");
-    expect(userText?.textContent ?? "").toContain("Agent Role and Instructions");
-    expect(userText?.textContent ?? "").toContain("擅长前后端桌面全局架构和编码");
-    expect(container.querySelector(".message-agent-icon-button")).toBeNull();
+    expect(userText?.textContent ?? "").toBe("这是一段用户原始内容。");
+    const agentIconButton = container.querySelector(".message-agent-icon-button");
+    expect(agentIconButton).toBeTruthy();
+    expect(container.querySelector(".message-agent-tag-text")).toBeNull();
   });
 
   it("shows selected agent tag for realtime/local user message metadata", () => {
