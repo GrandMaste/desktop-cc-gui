@@ -44,6 +44,7 @@ import {
 
 const REDUCER_NOOP_GUARD_ENABLED = isReducerNoopGuardEnabled();
 const INCREMENTAL_DERIVATION_ENABLED = isIncrementalDerivationEnabled();
+const PENDING_THREAD_LAST_AGENT_ANCHOR_TTL_MS = 5 * 60 * 1000;
 
 function formatThreadName(text: string) {
   const trimmed = text.trim();
@@ -2242,12 +2243,37 @@ export function threadReducer(state: ThreadState, action: ThreadAction): ThreadS
     case "setThreads": {
       const hidden = state.hiddenThreadIdsByWorkspace[action.workspaceId] ?? {};
       const existingThreads = state.threadsByWorkspace[action.workspaceId] ?? [];
+      const now = Date.now();
       // BUG FIX: Preserve engineSource and other info from existing threads when merging
       // This prevents loss of explicitly set engine types (e.g., Claude) when refreshing thread list
       const existingThreadById = new Map(
         existingThreads.map((thread) => [thread.id, thread]),
       );
       const newThreadIds = new Set(action.threads.map((thread) => thread.id));
+      const hasPendingThreadAnchor = (threadId: string) => {
+        const hasActiveTurn = (state.activeTurnIdByThread[threadId] ?? null) !== null;
+        if (hasActiveTurn) {
+          return true;
+        }
+        const itemCount = state.itemsByThread[threadId]?.length ?? 0;
+        const isProcessing = Boolean(state.threadStatusById[threadId]?.isProcessing);
+        if (isProcessing && itemCount > 0) {
+          return true;
+        }
+        const lastAgentMessageTimestamp =
+          state.lastAgentMessageByThread[threadId]?.timestamp ?? 0;
+        const hasRecentAgentMessage =
+          lastAgentMessageTimestamp > 0 &&
+          now - lastAgentMessageTimestamp <= PENDING_THREAD_LAST_AGENT_ANCHOR_TTL_MS;
+        if (hasRecentAgentMessage) {
+          return true;
+        }
+        return state.userInputRequests.some(
+          (request) =>
+            request.workspace_id === action.workspaceId
+            && request.params.thread_id === threadId,
+        );
+      };
 
       // Merge incoming threads with preserved existing info
       const visibleThreads = action.threads
@@ -2277,11 +2303,36 @@ export function threadReducer(state: ThreadState, action: ThreadAction): ThreadS
         }
       }
 
+      // Preserve non-active pending threads that are still anchored by realtime state.
+      // Without this, background CLI sessions can briefly appear as pending and then
+      // disappear on the next list refresh before local history indexing catches up.
+      const preservedThreadIds = new Set(visibleThreads.map((thread) => thread.id));
+      const pendingToPreserve = existingThreads.filter((thread) => {
+        const threadId = thread.id;
+        if (!threadId.includes("-pending-")) {
+          return false;
+        }
+        if (threadId === activeThreadId) {
+          return false;
+        }
+        if (hidden[threadId] || newThreadIds.has(threadId) || preservedThreadIds.has(threadId)) {
+          return false;
+        }
+        return hasPendingThreadAnchor(threadId);
+      });
+      pendingToPreserve.forEach((thread) => preservedThreadIds.add(thread.id));
+      const mergedVisibleThreads =
+        pendingToPreserve.length > 0
+          ? activeThreadId && visibleThreads[0]?.id === activeThreadId
+            ? [visibleThreads[0], ...pendingToPreserve, ...visibleThreads.slice(1)]
+            : [...pendingToPreserve, ...visibleThreads]
+          : visibleThreads;
+
       return {
         ...state,
         threadsByWorkspace: {
           ...state.threadsByWorkspace,
-          [action.workspaceId]: visibleThreads,
+          [action.workspaceId]: mergedVisibleThreads,
         },
       };
     }

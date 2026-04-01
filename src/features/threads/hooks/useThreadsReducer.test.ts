@@ -2459,6 +2459,289 @@ describe("threadReducer", () => {
     expect(ids).not.toContain("thread-bg");
   });
 
+  it("keeps anchored non-active pending threads during list refresh", () => {
+    const base: ThreadState = {
+      ...initialState,
+      activeThreadIdByWorkspace: { "ws-1": "thread-main" },
+      threadsByWorkspace: {
+        "ws-1": [
+          { id: "thread-main", name: "Main", updatedAt: 200, engineSource: "codex" },
+          {
+            id: "claude-pending-bg",
+            name: "Background Claude",
+            updatedAt: 190,
+            engineSource: "claude",
+          },
+        ],
+      },
+      threadStatusById: {
+        "claude-pending-bg": {
+          isProcessing: true,
+          hasUnread: false,
+          isReviewing: false,
+          processingStartedAt: 120,
+          lastDurationMs: null,
+        },
+      },
+      itemsByThread: {
+        "claude-pending-bg": [
+          {
+            id: "pending-user-1",
+            kind: "message",
+            role: "user",
+            text: "background job",
+          },
+        ],
+      },
+    };
+
+    const next = threadReducer(base, {
+      type: "setThreads",
+      workspaceId: "ws-1",
+      threads: [{ id: "thread-main", name: "Main", updatedAt: 300, engineSource: "codex" }],
+    });
+
+    const ids = next.threadsByWorkspace["ws-1"]?.map((thread) => thread.id) ?? [];
+    expect(ids).toContain("thread-main");
+    expect(ids).toContain("claude-pending-bg");
+  });
+
+  it("drops idle non-active pending threads during list refresh", () => {
+    const base: ThreadState = {
+      ...initialState,
+      activeThreadIdByWorkspace: { "ws-1": "thread-main" },
+      threadsByWorkspace: {
+        "ws-1": [
+          { id: "thread-main", name: "Main", updatedAt: 200, engineSource: "codex" },
+          {
+            id: "claude-pending-idle",
+            name: "Idle Claude",
+            updatedAt: 190,
+            engineSource: "claude",
+          },
+        ],
+      },
+      threadStatusById: {
+        "claude-pending-idle": {
+          isProcessing: false,
+          hasUnread: false,
+          isReviewing: false,
+          processingStartedAt: null,
+          lastDurationMs: null,
+        },
+      },
+      itemsByThread: {
+        "claude-pending-idle": [],
+      },
+    };
+
+    const next = threadReducer(base, {
+      type: "setThreads",
+      workspaceId: "ws-1",
+      threads: [{ id: "thread-main", name: "Main", updatedAt: 300, engineSource: "codex" }],
+    });
+
+    const ids = next.threadsByWorkspace["ws-1"]?.map((thread) => thread.id) ?? [];
+    expect(ids).toContain("thread-main");
+    expect(ids).not.toContain("claude-pending-idle");
+  });
+
+  it("keeps pending thread anchored by recent last agent message", () => {
+    const now = Date.now();
+    const base: ThreadState = {
+      ...initialState,
+      activeThreadIdByWorkspace: { "ws-1": "thread-main" },
+      threadsByWorkspace: {
+        "ws-1": [
+          { id: "thread-main", name: "Main", updatedAt: 200, engineSource: "codex" },
+          {
+            id: "claude-pending-recent",
+            name: "Recent Claude",
+            updatedAt: 190,
+            engineSource: "claude",
+          },
+        ],
+      },
+      lastAgentMessageByThread: {
+        "claude-pending-recent": {
+          text: "latest response",
+          timestamp: now - 60_000,
+        },
+      },
+      threadStatusById: {
+        "claude-pending-recent": {
+          isProcessing: false,
+          hasUnread: false,
+          isReviewing: false,
+          processingStartedAt: null,
+          lastDurationMs: null,
+        },
+      },
+      itemsByThread: {
+        "claude-pending-recent": [],
+      },
+    };
+
+    const next = threadReducer(base, {
+      type: "setThreads",
+      workspaceId: "ws-1",
+      threads: [{ id: "thread-main", name: "Main", updatedAt: 300, engineSource: "codex" }],
+    });
+
+    const ids = next.threadsByWorkspace["ws-1"]?.map((thread) => thread.id) ?? [];
+    expect(ids).toContain("thread-main");
+    expect(ids).toContain("claude-pending-recent");
+  });
+
+  it("drops pending thread anchored only by stale last agent message", () => {
+    const now = Date.now();
+    const base: ThreadState = {
+      ...initialState,
+      activeThreadIdByWorkspace: { "ws-1": "thread-main" },
+      threadsByWorkspace: {
+        "ws-1": [
+          { id: "thread-main", name: "Main", updatedAt: 200, engineSource: "codex" },
+          {
+            id: "claude-pending-stale",
+            name: "Stale Claude",
+            updatedAt: 190,
+            engineSource: "claude",
+          },
+        ],
+      },
+      lastAgentMessageByThread: {
+        "claude-pending-stale": {
+          text: "old response",
+          timestamp: now - 10 * 60_000,
+        },
+      },
+      threadStatusById: {
+        "claude-pending-stale": {
+          isProcessing: false,
+          hasUnread: false,
+          isReviewing: false,
+          processingStartedAt: null,
+          lastDurationMs: null,
+        },
+      },
+      itemsByThread: {
+        "claude-pending-stale": [],
+      },
+    };
+
+    const next = threadReducer(base, {
+      type: "setThreads",
+      workspaceId: "ws-1",
+      threads: [{ id: "thread-main", name: "Main", updatedAt: 300, engineSource: "codex" }],
+    });
+
+    const ids = next.threadsByWorkspace["ws-1"]?.map((thread) => thread.id) ?? [];
+    expect(ids).toContain("thread-main");
+    expect(ids).not.toContain("claude-pending-stale");
+  });
+
+  it("keeps pending on immediate refresh then drops it after anchor TTL expires", () => {
+    const anchorTimestamp = Date.parse("2026-04-01T00:00:00.000Z");
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(anchorTimestamp + 60_000);
+    try {
+      const base: ThreadState = {
+        ...initialState,
+        activeThreadIdByWorkspace: { "ws-1": "thread-main" },
+        threadsByWorkspace: {
+          "ws-1": [
+            { id: "thread-main", name: "Main", updatedAt: 200, engineSource: "codex" },
+            {
+              id: "claude-pending-ttl",
+              name: "TTL Claude",
+              updatedAt: 190,
+              engineSource: "claude",
+            },
+          ],
+        },
+        lastAgentMessageByThread: {
+          "claude-pending-ttl": {
+            text: "fresh message",
+            timestamp: anchorTimestamp,
+          },
+        },
+        threadStatusById: {
+          "claude-pending-ttl": {
+            isProcessing: false,
+            hasUnread: false,
+            isReviewing: false,
+            processingStartedAt: null,
+            lastDurationMs: null,
+          },
+        },
+        itemsByThread: {
+          "claude-pending-ttl": [],
+        },
+      };
+
+      const firstRefresh = threadReducer(base, {
+        type: "setThreads",
+        workspaceId: "ws-1",
+        threads: [{ id: "thread-main", name: "Main", updatedAt: 300, engineSource: "codex" }],
+      });
+      const firstIds = firstRefresh.threadsByWorkspace["ws-1"]?.map((thread) => thread.id) ?? [];
+      expect(firstIds).toContain("claude-pending-ttl");
+
+      nowSpy.mockReturnValue(anchorTimestamp + 6 * 60_000);
+      const secondRefresh = threadReducer(firstRefresh, {
+        type: "setThreads",
+        workspaceId: "ws-1",
+        threads: [{ id: "thread-main", name: "Main", updatedAt: 320, engineSource: "codex" }],
+      });
+      const secondIds = secondRefresh.threadsByWorkspace["ws-1"]?.map((thread) => thread.id) ?? [];
+      expect(secondIds).not.toContain("claude-pending-ttl");
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("keeps active thread at top when preserving background pending threads", () => {
+    const base: ThreadState = {
+      ...initialState,
+      activeThreadIdByWorkspace: { "ws-1": "thread-active" },
+      threadsByWorkspace: {
+        "ws-1": [
+          { id: "thread-active", name: "Active", updatedAt: 200, engineSource: "codex" },
+          {
+            id: "claude-pending-bg",
+            name: "Background Claude",
+            updatedAt: 190,
+            engineSource: "claude",
+          },
+        ],
+      },
+      threadStatusById: {
+        "claude-pending-bg": {
+          isProcessing: true,
+          hasUnread: false,
+          isReviewing: false,
+          processingStartedAt: 100,
+          lastDurationMs: null,
+        },
+      },
+      itemsByThread: {
+        "claude-pending-bg": [
+          { id: "pending-user-1", kind: "message", role: "user", text: "background job" },
+        ],
+      },
+    };
+
+    const next = threadReducer(base, {
+      type: "setThreads",
+      workspaceId: "ws-1",
+      threads: [{ id: "thread-visible", name: "Visible", updatedAt: 300, engineSource: "codex" }],
+    });
+
+    const ids = next.threadsByWorkspace["ws-1"]?.map((thread) => thread.id) ?? [];
+    expect(ids[0]).toBe("thread-active");
+    expect(ids).toContain("claude-pending-bg");
+    expect(ids).toContain("thread-visible");
+  });
+
   it("does not force-rename when multiple Claude pending threads remain ambiguous", () => {
     const base: ThreadState = {
       ...initialState,
