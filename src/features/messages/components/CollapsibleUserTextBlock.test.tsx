@@ -60,6 +60,18 @@ describe("CollapsibleUserTextBlock", () => {
     expect(text).toBe("看图");
   });
 
+  it("keeps version-like prose after markdown reference", () => {
+    const content =
+      "@/Users/demo/repo/CHANGELOG.md 新增0.3.11 章节.格式照旧";
+    const { container } = render(<CollapsibleUserTextBlock content={content} />);
+    const refs = container.querySelectorAll(".user-reference-card-item");
+    const text = container.querySelector(".user-collapsible-text-content")?.textContent ?? "";
+
+    expect(refs).toHaveLength(1);
+    expect(container.textContent ?? "").toContain("CHANGELOG.md");
+    expect(text).toContain("新增0.3.11 章节.格式照旧");
+  });
+
   it("continues extracting references even when plain text appears between mentions", () => {
     const content =
       "@/Users/demo/repo/HelloWorld.java 这是啥 @/Users/demo/repo/pom.xml";
@@ -70,6 +82,42 @@ describe("CollapsibleUserTextBlock", () => {
     expect(refs).toHaveLength(2);
     expect(text).toContain("这是啥");
     expect(text).not.toContain("@/Users/demo/repo/pom.xml");
+  });
+
+  it("extracts adjacent path reference without boundary whitespace", () => {
+    const content =
+      "@/Users/demo/repo/HelloWorld.java 这是啥啊@/Users/demo/repo/pom.xml aa";
+    const { container } = render(<CollapsibleUserTextBlock content={content} />);
+    const refs = container.querySelectorAll(".user-reference-card-item");
+    const text = container.querySelector(".user-collapsible-text-content")?.textContent ?? "";
+
+    expect(refs).toHaveLength(2);
+    expect(container.textContent ?? "").toContain("HelloWorld.java");
+    expect(container.textContent ?? "").toContain("pom.xml");
+    expect(text).toMatch(/这是啥啊\s*aa/);
+    expect(text).not.toContain("@/Users/demo/repo/pom.xml");
+  });
+
+  it("extracts adjacent Windows drive path without boundary whitespace", () => {
+    const content = "看这个@C:\\repo\\springboot-demo\\pom.xml aa";
+    const { container } = render(<CollapsibleUserTextBlock content={content} />);
+    const refs = container.querySelectorAll(".user-reference-card-item");
+    const text = container.querySelector(".user-collapsible-text-content")?.textContent ?? "";
+
+    expect(refs).toHaveLength(1);
+    expect(container.textContent ?? "").toContain("pom.xml");
+    expect(text).toMatch(/看这个\s*aa/);
+    expect(text).not.toContain("@C:\\repo\\springboot-demo\\pom.xml");
+  });
+
+  it("keeps adjacent non-path token as plain text", () => {
+    const content = "版本@v0.3.11 保持原文";
+    const { container } = render(<CollapsibleUserTextBlock content={content} />);
+    const refs = container.querySelectorAll(".user-reference-card-item");
+    const text = container.querySelector(".user-collapsible-text-content")?.textContent ?? "";
+
+    expect(refs).toHaveLength(0);
+    expect(text).toBe(content);
   });
 
   it("extracts Windows file URL path with localhost host", () => {

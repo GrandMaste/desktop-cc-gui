@@ -26,6 +26,33 @@ function isQuoteChar(char: string | undefined) {
   return char === '"' || char === "'";
 }
 
+function isInlinePathReferencePrefix(content: string, tokenStart: number) {
+  const firstChar = content[tokenStart];
+  if (!firstChar) {
+    return false;
+  }
+  if (isQuoteChar(firstChar)) {
+    return true;
+  }
+  if (firstChar === "/" || firstChar === "~") {
+    return true;
+  }
+  if (firstChar === ".") {
+    const nextChar = content[tokenStart + 1];
+    return nextChar === "/" || nextChar === ".";
+  }
+  if (firstChar === "\\") {
+    return content[tokenStart + 1] === "\\";
+  }
+  if (firstChar.toLowerCase() === "f") {
+    return content.slice(tokenStart, tokenStart + 7).toLowerCase() === "file://";
+  }
+  if (/[A-Za-z]/.test(firstChar)) {
+    return content[tokenStart + 1] === ":";
+  }
+  return false;
+}
+
 function splitTrailingPunctuation(token: string) {
   const suffixMatch = token.match(/[),.;!?，。；：！？、）】》”’"'`]+$/);
   if (!suffixMatch) {
@@ -149,6 +176,26 @@ function resolveReferenceToken(rawToken: string) {
       suffix,
       consumedLength: candidateEnd,
     };
+
+    // Once we hit a likely file path (`*.md`, `*.ts`, etc.) and the next character
+    // is whitespace, treat it as a complete match to avoid swallowing trailing prose.
+    const nextChar = rawToken[candidateEnd];
+    if (nextChar && /\s/.test(nextChar)) {
+      const { baseName } = getPathParts(normalizedPath);
+      const extension = baseName.includes(".") ? (baseName.split(".").pop() ?? "") : "";
+      if (/[A-Za-z]/.test(extension)) {
+        let consumedLength = candidateEnd;
+        while (consumedLength < rawToken.length && /\s/.test(rawToken[consumedLength] ?? "")) {
+          consumedLength += 1;
+        }
+        bestMatch = {
+          normalizedPath,
+          suffix,
+          consumedLength,
+        };
+        break;
+      }
+    }
   }
 
   return bestMatch;
@@ -227,7 +274,7 @@ function parseUserTextContent(content: string): { plainText: string; references:
     }
 
     const previousChar = index > 0 ? content[index - 1] : undefined;
-    if (!isTokenBoundary(previousChar)) {
+    if (!isTokenBoundary(previousChar) && !isInlinePathReferencePrefix(content, index + 1)) {
       index += 1;
       continue;
     }
@@ -272,9 +319,6 @@ function parseUserTextContent(content: string): { plainText: string; references:
     if (suffix) {
       textParts.push(suffix);
     }
-    if (consumedLength < rawToken.length) {
-      textParts.push(rawToken.slice(consumedLength));
-    }
 
     const dedupeKey = normalizedPath.toLowerCase();
     if (!seenPaths.has(dedupeKey)) {
@@ -282,8 +326,9 @@ function parseUserTextContent(content: string): { plainText: string; references:
       references.push(createReferenceSegment(normalizedPath));
     }
 
-    cursor = tokenEnd;
-    index = tokenEnd;
+    const consumedEnd = index + 1 + consumedLength;
+    cursor = consumedEnd;
+    index = consumedEnd;
   }
 
   if (cursor < content.length) {
