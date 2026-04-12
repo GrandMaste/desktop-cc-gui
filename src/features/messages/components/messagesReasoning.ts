@@ -42,9 +42,15 @@ function sliceByComparableLength(text: string, targetLength: number) {
   return "";
 }
 
+function shouldStripSingleLineReasoningPrefix(remainder: string) {
+  const normalized = remainder.trimStart();
+  return /^[([{（【]?(?:\d+[.)、]|[-*•])\s*/.test(normalized);
+}
+
 function stripLeadingReasoningTitleOverlap(
   content: string,
   candidates: string[],
+  allowSingleLinePrefixStrip = false,
 ) {
   const trimmedContent = content.trim();
   if (!trimmedContent) {
@@ -59,10 +65,20 @@ function stripLeadingReasoningTitleOverlap(
 
   for (const candidate of normalizedCandidates) {
     if (trimmedContent.startsWith(candidate)) {
-      return trimmedContent
+      const stripped = trimmedContent
         .slice(candidate.length)
         .replace(/^[\s，。！？!?:：;；、-]+/, "")
         .trim();
+      if (!stripped) {
+        return trimmedContent;
+      }
+      if (
+        allowSingleLinePrefixStrip ||
+        shouldStripSingleLineReasoningPrefix(stripped)
+      ) {
+        return stripped;
+      }
+      return trimmedContent;
     }
   }
 
@@ -73,11 +89,21 @@ function stripLeadingReasoningTitleOverlap(
       continue;
     }
     if (compactContent === compactCandidate) {
-      return "";
+      return trimmedContent;
     }
     if (compactContent.startsWith(compactCandidate)) {
       const sliced = sliceByComparableLength(trimmedContent, compactCandidate.length);
-      return sliced.replace(/^[\s，。！？!?:：;；、-]+/, "").trim();
+      const stripped = sliced.replace(/^[\s，。！？!?:：;；、-]+/, "").trim();
+      if (!stripped) {
+        return trimmedContent;
+      }
+      if (
+        allowSingleLinePrefixStrip ||
+        shouldStripSingleLineReasoningPrefix(stripped)
+      ) {
+        return stripped;
+      }
+      return trimmedContent;
     }
   }
 
@@ -253,9 +279,14 @@ export function parseReasoning(item: ReasoningConversationItem): ParsedReasoning
     contentBody = content.trim();
   }
   const normalizedSummaryBody = summaryBody.trim();
+  const allowSingleLinePrefixStrip =
+    normalizedSummaryBody.length > 0 ||
+    summary.includes("\n") ||
+    (!hasSummary && contentBody.includes("\n"));
   const normalizedContentBody = stripLeadingReasoningTitleOverlap(
     contentBody,
     [rawTitle, cleanTitle, normalizedSummaryBody],
+    allowSingleLinePrefixStrip,
   ).trim();
   const compactSummaryBody = compactReasoningText(normalizedSummaryBody);
   const compactContentBody = compactReasoningText(normalizedContentBody);

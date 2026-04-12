@@ -1882,6 +1882,73 @@ describe("Messages", () => {
     expect(detailText).toContain("我应该简洁友好地回应，并询问如何帮助。");
   });
 
+  it("preserves reasoning detail when summary is only a history preview prefix", () => {
+    const fullText =
+      "先检查项目目录结构和入口模块，再确认核心路由和状态来源，然后核对实时事件与历史回放链路，最后比对幕布渲染差异，确认是哪一步开始丢失思考正文。";
+    const items: ConversationItem[] = [
+      {
+        id: "reasoning-history-preview-1",
+        kind: "reasoning",
+        summary: fullText.slice(0, 36),
+        content: fullText,
+      },
+    ];
+
+    const { container } = render(
+      <Messages
+        items={items}
+        threadId="thread-1"
+        workspaceId="ws-1"
+        isThinking
+        processingStartedAt={Date.now() - 2_000}
+        activeEngine="claude"
+        openTargets={[]}
+        selectedOpenAppId=""
+      />,
+    );
+
+    const reasoningDetail = container.querySelector(".thinking-content");
+    expect(reasoningDetail).toBeTruthy();
+    expect((reasoningDetail?.textContent ?? "").replace(/\s+/g, "")).toContain(
+      fullText.replace(/\s+/g, ""),
+    );
+  });
+
+  it("preserves multiline reasoning detail when summary is only a preview prefix", () => {
+    const fullText = [
+      "先检查项目目录结构和入口模块，再确认核心路由和状态来源，",
+      "然后核对实时事件与历史回放链路，",
+      "最后比对幕布渲染差异，确认是哪一步开始丢失思考正文。",
+    ].join("\n");
+    const items: ConversationItem[] = [
+      {
+        id: "reasoning-history-preview-multiline-1",
+        kind: "reasoning",
+        summary: "先检查项目目录结构和入口模块，再确认核心路由和状态来源，",
+        content: fullText,
+      },
+    ];
+
+    const { container } = render(
+      <Messages
+        items={items}
+        threadId="thread-1"
+        workspaceId="ws-1"
+        isThinking
+        processingStartedAt={Date.now() - 2_000}
+        activeEngine="claude"
+        openTargets={[]}
+        selectedOpenAppId=""
+      />,
+    );
+
+    const reasoningDetail = container.querySelector(".thinking-content");
+    expect(reasoningDetail).toBeTruthy();
+    expect((reasoningDetail?.textContent ?? "").replace(/\s+/g, "")).toContain(
+      fullText.replace(/\s+/g, ""),
+    );
+  });
+
   it("dedupes adjacent duplicate reasoning blocks in history view", () => {
     const repeated =
       "用户问“你好你是 codex 吗”，这是一个简单的身份确认问题。根据系统提示，我需要：首先确认已读取规则。";
