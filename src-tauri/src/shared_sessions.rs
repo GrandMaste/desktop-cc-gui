@@ -193,7 +193,12 @@ fn write_string_atomically(path: &Path, content: &str) -> Result<(), String> {
     let filename = path
         .file_name()
         .and_then(|value| value.to_str())
-        .ok_or_else(|| format!("Shared session path has invalid filename: {}", path.display()))?;
+        .ok_or_else(|| {
+            format!(
+                "Shared session path has invalid filename: {}",
+                path.display()
+            )
+        })?;
     let temp_path = parent.join(format!(".{filename}.{}.tmp", Uuid::new_v4()));
     let mut temp_file = std::fs::OpenOptions::new()
         .create_new(true)
@@ -236,7 +241,10 @@ fn shared_session_dir(workspace_id: &str, shared_session_id: &str) -> Result<Pat
     Ok(workspace_shared_sessions_dir(workspace_id)?.join(shared_session_id))
 }
 
-fn shared_session_meta_path(workspace_id: &str, shared_session_id: &str) -> Result<PathBuf, String> {
+fn shared_session_meta_path(
+    workspace_id: &str,
+    shared_session_id: &str,
+) -> Result<PathBuf, String> {
     Ok(shared_session_dir(workspace_id, shared_session_id)?.join("meta.json"))
 }
 
@@ -292,10 +300,10 @@ fn is_pending_shared_binding_thread_id(engine: EngineType, thread_id: &str) -> b
     }
     match engine {
         EngineType::Claude => normalized.starts_with("claude-pending-shared-"),
-        EngineType::Codex => {
-            normalized.starts_with("codex-pending-shared-")
-                || Uuid::parse_str(normalized).is_ok()
-        }
+        // Codex native thread IDs are often UUID-shaped strings. Treat only explicit
+        // shared placeholders as pending; otherwise every send would create a new
+        // native Codex thread and lose shared-context continuity.
+        EngineType::Codex => normalized.starts_with("codex-pending-shared-"),
         EngineType::Gemini | EngineType::OpenCode => false,
     }
 }
@@ -339,16 +347,17 @@ async fn ensure_shared_session_native_binding(
 ) -> Result<String, String> {
     let now = now_millis();
     let (current_native_thread_id, needs_codex_thread) = {
-        let binding = meta
-            .bindings_by_engine
-            .entry(engine)
-            .or_insert_with(|| SharedEngineBinding {
-                engine,
-                native_thread_id: engine_binding_thread_id(engine, &Uuid::new_v4().to_string()),
-                created_at: now,
-                last_used_at: now,
-                last_synced_turn_seq: last_turn_seq,
-            });
+        let binding =
+            meta.bindings_by_engine
+                .entry(engine)
+                .or_insert_with(|| SharedEngineBinding {
+                    engine,
+                    native_thread_id: engine_binding_thread_id(engine, &Uuid::new_v4().to_string()),
+                    created_at: now,
+                    last_used_at: now,
+                    // New engine binding should replay canonical shared history on first send.
+                    last_synced_turn_seq: 0,
+                });
         binding.last_used_at = now;
         (
             binding.native_thread_id.clone(),
@@ -362,8 +371,8 @@ async fn ensure_shared_session_native_binding(
     }
 
     codex::ensure_codex_session(workspace_id, state, app).await?;
-    let started = codex_core::start_thread_core(&state.sessions, workspace_id.to_string(), None)
-        .await?;
+    let started =
+        codex_core::start_thread_core(&state.sessions, workspace_id.to_string(), None).await?;
     let result = started
         .get("result")
         .cloned()
@@ -390,7 +399,10 @@ async fn ensure_shared_session_native_binding(
     Ok(next_native_thread_id)
 }
 
-fn read_shared_session_meta(workspace_id: &str, shared_session_id: &str) -> Result<SharedSessionMeta, String> {
+fn read_shared_session_meta(
+    workspace_id: &str,
+    shared_session_id: &str,
+) -> Result<SharedSessionMeta, String> {
     let path = shared_session_meta_path(workspace_id, shared_session_id)?;
     let raw = std::fs::read_to_string(&path).map_err(|error| error.to_string())?;
     let mut meta: SharedSessionMeta =
@@ -520,7 +532,8 @@ fn extract_first_user_title(items: &[Value]) -> Option<String> {
 }
 
 fn count_user_turns(items: &[Value]) -> u64 {
-    items.iter()
+    items
+        .iter()
         .filter(|item| {
             item.get("kind").and_then(Value::as_str) == Some("message")
                 && item.get("role").and_then(Value::as_str) == Some("user")
@@ -529,12 +542,12 @@ fn count_user_turns(items: &[Value]) -> u64 {
 }
 
 fn build_delta_sync_prefix(items: &[Value], from_turn_seq: u64) -> Option<String> {
-  if items.is_empty() {
-    return None;
-  }
-  let mut turn_index = 0_u64;
-  let mut current_user: Option<String> = None;
-  let mut collected: Vec<String> = Vec::new();
+    if items.is_empty() {
+        return None;
+    }
+    let mut turn_index = 0_u64;
+    let mut current_user: Option<String> = None;
+    let mut collected: Vec<String> = Vec::new();
 
     for item in items {
         let kind = item.get("kind").and_then(Value::as_str).unwrap_or_default();
@@ -691,7 +704,10 @@ pub async fn load_shared_session(
         selected_engine: meta.selected_engine,
         thread_kind: "shared".to_string(),
         engine_source: meta.selected_engine,
-        items: snapshot.as_ref().map(|entry| entry.items.clone()).unwrap_or_default(),
+        items: snapshot
+            .as_ref()
+            .map(|entry| entry.items.clone())
+            .unwrap_or_default(),
         updated_at: meta.updated_at,
     };
     Ok(json!(payload))
@@ -703,24 +719,34 @@ pub async fn set_shared_session_selected_engine(
     thread_id: String,
     selected_engine: EngineType,
     state: State<'_, AppState>,
-    app: AppHandle,
+    _app: AppHandle,
 ) -> Result<Value, String> {
     ensure_known_workspace(&state.workspaces, &workspace_id).await?;
     let selected_engine = ensure_supported_shared_session_engine(selected_engine)?;
     let shared_session_id = parse_shared_session_id(&thread_id)?;
     let mut meta = read_shared_session_meta(&workspace_id, &shared_session_id)?;
-    let last_turn_seq = meta.last_turn_seq;
-    let native_thread_id = ensure_shared_session_native_binding(
-        &workspace_id,
-        &mut meta,
-        selected_engine,
-        last_turn_seq,
-        &state,
-        &app,
-    )
-    .await?;
+    let now = now_millis();
+    let native_thread_id = meta
+        .bindings_by_engine
+        .entry(selected_engine)
+        .or_insert_with(|| SharedEngineBinding {
+            engine: selected_engine,
+            native_thread_id: engine_binding_thread_id(
+                selected_engine,
+                &Uuid::new_v4().to_string(),
+            ),
+            created_at: now,
+            last_used_at: now,
+            // Selector update should not create a live native session.
+            last_synced_turn_seq: 0,
+        })
+        .native_thread_id
+        .clone();
+    if let Some(binding) = meta.bindings_by_engine.get_mut(&selected_engine) {
+        binding.last_used_at = now;
+    }
     meta.selected_engine = selected_engine;
-    meta.updated_at = now_millis();
+    meta.updated_at = now;
     write_shared_session_meta(&meta)?;
     Ok(json!({
         "threadId": shared_thread_id(&meta.id),
@@ -745,13 +771,16 @@ pub async fn update_shared_session_native_binding(
     let shared_session_id = parse_shared_session_id(&thread_id)?;
     let new_native_thread_id = validate_shared_native_thread_id(&new_native_thread_id)?;
     let mut meta = read_shared_session_meta(&workspace_id, &shared_session_id)?;
-    let entry = meta.bindings_by_engine.entry(engine).or_insert_with(|| SharedEngineBinding {
-        engine,
-        native_thread_id: new_native_thread_id.clone(),
-        created_at: now_millis(),
-        last_used_at: now_millis(),
-        last_synced_turn_seq: meta.last_turn_seq,
-    });
+    let entry = meta
+        .bindings_by_engine
+        .entry(engine)
+        .or_insert_with(|| SharedEngineBinding {
+            engine,
+            native_thread_id: new_native_thread_id.clone(),
+            created_at: now_millis(),
+            last_used_at: now_millis(),
+            last_synced_turn_seq: meta.last_turn_seq,
+        });
     let matches_old = old_native_thread_id
         .as_ref()
         .map(|value| value.trim() == entry.native_thread_id.trim())
@@ -840,19 +869,23 @@ pub async fn send_shared_session_message(
     let _workspace_path = resolve_workspace_path(&state.workspaces, &workspace_id).await?;
     let (mut meta, snapshot) = load_meta_and_snapshot(&workspace_id, &shared_session_id)?;
     let now = now_millis();
-    let latest_items = snapshot.as_ref().map(|entry| entry.items.clone()).unwrap_or_default();
+    let latest_items = snapshot
+        .as_ref()
+        .map(|entry| entry.items.clone())
+        .unwrap_or_default();
     let latest_turn_seq = count_user_turns(&latest_items);
     let sync_from_turn_seq = {
-        let binding = meta
-            .bindings_by_engine
-            .entry(engine)
-            .or_insert_with(|| SharedEngineBinding {
-                engine,
-                native_thread_id: engine_binding_thread_id(engine, &Uuid::new_v4().to_string()),
-                created_at: now,
-                last_used_at: now,
-                last_synced_turn_seq: latest_turn_seq,
-            });
+        let binding =
+            meta.bindings_by_engine
+                .entry(engine)
+                .or_insert_with(|| SharedEngineBinding {
+                    engine,
+                    native_thread_id: engine_binding_thread_id(engine, &Uuid::new_v4().to_string()),
+                    created_at: now,
+                    last_used_at: now,
+                    // Fresh engine bindings should consume canonical history before answering.
+                    last_synced_turn_seq: 0,
+                });
         binding.last_synced_turn_seq
     };
 
@@ -880,17 +913,17 @@ pub async fn send_shared_session_message(
             .await?;
             if let Some(binding) = meta.bindings_by_engine.get_mut(&engine) {
                 binding.last_used_at = now;
-                binding.last_synced_turn_seq = latest_turn_seq + 1;
             }
             meta.selected_engine = engine;
             meta.updated_at = now;
-            meta.last_turn_seq = latest_turn_seq + 1;
+            // Persist binding materialization before sending so failures don't
+            // repeatedly create new native threads.
             write_shared_session_meta(&meta)?;
             let mode_enforcement_enabled = {
                 let settings = state.app_settings.lock().await;
                 settings.codex_mode_enforcement_enabled
             };
-            codex_core::send_user_message_core(
+            let response = codex_core::send_user_message_core(
                 &state.sessions,
                 workspace_id.clone(),
                 native_thread_id.clone(),
@@ -904,7 +937,16 @@ pub async fn send_shared_session_message(
                 custom_spec_root,
                 mode_enforcement_enabled,
             )
-            .await?
+            .await?;
+            if let Some(binding) = meta.bindings_by_engine.get_mut(&engine) {
+                binding.last_used_at = now;
+                binding.last_synced_turn_seq = latest_turn_seq + 1;
+            }
+            meta.selected_engine = engine;
+            meta.updated_at = now;
+            meta.last_turn_seq = latest_turn_seq + 1;
+            write_shared_session_meta(&meta)?;
+            response
         }
         EngineType::Claude => {
             let native_thread_id = ensure_shared_session_native_binding(
@@ -916,7 +958,8 @@ pub async fn send_shared_session_message(
                 &app,
             )
             .await?;
-            let continue_session = binding_uses_established_native_thread(engine, &native_thread_id);
+            let continue_session =
+                binding_uses_established_native_thread(engine, &native_thread_id);
             let session_id = if continue_session {
                 native_thread_id
                     .split_once(':')
@@ -926,13 +969,11 @@ pub async fn send_shared_session_message(
             };
             if let Some(binding) = meta.bindings_by_engine.get_mut(&engine) {
                 binding.last_used_at = now;
-                binding.last_synced_turn_seq = latest_turn_seq + 1;
             }
             meta.selected_engine = engine;
             meta.updated_at = now;
-            meta.last_turn_seq = latest_turn_seq + 1;
             write_shared_session_meta(&meta)?;
-            engine::engine_send_message(
+            let response = engine::engine_send_message(
                 workspace_id.clone(),
                 outbound_text,
                 Some(engine),
@@ -949,7 +990,16 @@ pub async fn send_shared_session_message(
                 app,
                 state,
             )
-            .await?
+            .await?;
+            if let Some(binding) = meta.bindings_by_engine.get_mut(&engine) {
+                binding.last_used_at = now;
+                binding.last_synced_turn_seq = latest_turn_seq + 1;
+            }
+            meta.selected_engine = engine;
+            meta.updated_at = now;
+            meta.last_turn_seq = latest_turn_seq + 1;
+            write_shared_session_meta(&meta)?;
+            response
         }
         EngineType::Gemini | EngineType::OpenCode => {
             return Err(format!(
@@ -981,8 +1031,8 @@ mod tests {
         SharedSessionMeta,
     };
     use crate::engine::EngineType;
-    use std::collections::HashMap;
     use serde_json::json;
+    use std::collections::HashMap;
 
     #[test]
     fn derives_title_from_first_user_message() {
@@ -1029,7 +1079,7 @@ mod tests {
             EngineType::Codex,
             "codex-pending-shared-1"
         ));
-        assert!(is_pending_shared_binding_thread_id(
+        assert!(!is_pending_shared_binding_thread_id(
             EngineType::Codex,
             "550e8400-e29b-41d4-a716-446655440000"
         ));
@@ -1053,7 +1103,7 @@ mod tests {
             EngineType::Codex,
             "codex-pending-shared-1"
         ));
-        assert!(!binding_uses_established_native_thread(
+        assert!(binding_uses_established_native_thread(
             EngineType::Codex,
             "550e8400-e29b-41d4-a716-446655440000"
         ));

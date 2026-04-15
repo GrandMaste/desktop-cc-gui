@@ -16,6 +16,7 @@ import {
 import { hydrateToolSnapshotWithEventParams } from "../../threads/adapters/toolSnapshotHydration";
 import {
   rebindSharedSessionNativeThread,
+  resolvePendingSharedSessionBindingForEngine,
   resolveSharedSessionBindingByNativeThread,
 } from "../../shared-session/runtime/sharedSessionBridge";
 import { updateSharedSessionNativeBinding as updateSharedSessionNativeBindingService } from "../../shared-session/services/sharedSessions";
@@ -663,7 +664,7 @@ export function useAppServerEvents(
 
       const params = (message.params as Record<string, unknown>) ?? {};
       const rawThreadId = extractThreadIdFromParams(params);
-      const sharedBridge = rawThreadId
+      let sharedBridge = rawThreadId
         ? resolveSharedSessionBindingByNativeThread(workspace_id, rawThreadId)
         : null;
       const requestIdValue = message.id ?? params.requestId ?? params.request_id;
@@ -878,6 +879,39 @@ export function useAppServerEvents(
           rawEngine === "gemini"
             ? rawEngine
             : null;
+
+        if (
+          !sharedBridge &&
+          threadId &&
+          eventEngine &&
+          (eventEngine === "codex" || eventEngine === "claude")
+        ) {
+          const pendingBinding = resolvePendingSharedSessionBindingForEngine(
+            workspace_id,
+            eventEngine,
+          );
+          if (pendingBinding) {
+            if (pendingBinding.nativeThreadId !== threadId) {
+              const rebound = rebindSharedSessionNativeThread({
+                workspaceId: workspace_id,
+                oldNativeThreadId: pendingBinding.nativeThreadId,
+                newNativeThreadId: threadId,
+              });
+              if (rebound) {
+                sharedBridge = rebound;
+                void updateSharedSessionNativeBindingService(
+                  workspace_id,
+                  rebound.sharedThreadId,
+                  rebound.engine,
+                  pendingBinding.nativeThreadId,
+                  threadId,
+                ).catch(() => {});
+              }
+            } else {
+              sharedBridge = pendingBinding;
+            }
+          }
+        }
 
         if (sharedBridge) {
           if (

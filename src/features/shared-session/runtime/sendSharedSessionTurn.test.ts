@@ -4,10 +4,12 @@ const {
   setSharedSessionSelectedEngine,
   sendSharedSessionMessage,
   registerSharedSessionNativeBinding,
+  rebindSharedSessionNativeThread,
 } = vi.hoisted(() => ({
   setSharedSessionSelectedEngine: vi.fn(),
   sendSharedSessionMessage: vi.fn(),
   registerSharedSessionNativeBinding: vi.fn(),
+  rebindSharedSessionNativeThread: vi.fn(),
 }));
 
 vi.mock("../services/sharedSessions", () => ({
@@ -17,6 +19,7 @@ vi.mock("../services/sharedSessions", () => ({
 
 vi.mock("./sharedSessionBridge", () => ({
   registerSharedSessionNativeBinding,
+  rebindSharedSessionNativeThread,
 }));
 
 import { sendSharedSessionTurn } from "./sendSharedSessionTurn";
@@ -26,11 +29,18 @@ describe("sendSharedSessionTurn", () => {
     setSharedSessionSelectedEngine.mockReset();
     sendSharedSessionMessage.mockReset();
     registerSharedSessionNativeBinding.mockReset();
+    rebindSharedSessionNativeThread.mockReset();
   });
 
   it("registers the selected native binding before sending the shared turn", async () => {
-    setSharedSessionSelectedEngine.mockResolvedValue({
+    rebindSharedSessionNativeThread.mockReturnValueOnce({
+      workspaceId: "ws-1",
+      sharedThreadId: "shared:thread-1",
       nativeThreadId: "codex-native-thread-1",
+      engine: "codex",
+    });
+    setSharedSessionSelectedEngine.mockResolvedValue({
+      nativeThreadId: "codex-pending-shared-1",
     });
     sendSharedSessionMessage.mockResolvedValue({
       nativeThreadId: "codex-native-thread-1",
@@ -49,7 +59,19 @@ describe("sendSharedSessionTurn", () => {
     expect(registerSharedSessionNativeBinding).toHaveBeenNthCalledWith(1, {
       workspaceId: "ws-1",
       sharedThreadId: "shared:thread-1",
-      nativeThreadId: "codex-native-thread-1",
+      nativeThreadId: "codex-pending-shared-1",
+      engine: "codex",
+    });
+    expect(rebindSharedSessionNativeThread).toHaveBeenCalledWith({
+      workspaceId: "ws-1",
+      oldNativeThreadId: "codex-pending-shared-1",
+      newNativeThreadId: "codex-native-thread-1",
+    });
+    expect(registerSharedSessionNativeBinding).toHaveBeenCalledTimes(1);
+    expect(registerSharedSessionNativeBinding).toHaveBeenNthCalledWith(1, {
+      workspaceId: "ws-1",
+      sharedThreadId: "shared:thread-1",
+      nativeThreadId: "codex-pending-shared-1",
       engine: "codex",
     });
     expect(setSharedSessionSelectedEngine.mock.invocationCallOrder[0]).toBeLessThan(
@@ -60,7 +82,13 @@ describe("sendSharedSessionTurn", () => {
     );
   });
 
-  it("updates the bridge when the send response finalizes a different native thread id", async () => {
+  it("updates the bridge when the send response finalizes a native thread id", async () => {
+    rebindSharedSessionNativeThread.mockReturnValueOnce({
+      workspaceId: "ws-2",
+      sharedThreadId: "shared:thread-2",
+      nativeThreadId: "claude:session-1",
+      engine: "claude",
+    });
     setSharedSessionSelectedEngine.mockResolvedValue({
       nativeThreadId: "claude-pending-shared-1",
     });
@@ -84,11 +112,11 @@ describe("sendSharedSessionTurn", () => {
       nativeThreadId: "claude-pending-shared-1",
       engine: "claude",
     });
-    expect(registerSharedSessionNativeBinding).toHaveBeenNthCalledWith(2, {
+    expect(rebindSharedSessionNativeThread).toHaveBeenCalledWith({
       workspaceId: "ws-2",
-      sharedThreadId: "shared:thread-2",
-      nativeThreadId: "claude:session-1",
-      engine: "claude",
+      oldNativeThreadId: "claude-pending-shared-1",
+      newNativeThreadId: "claude:session-1",
     });
+    expect(registerSharedSessionNativeBinding).toHaveBeenCalledTimes(1);
   });
 });

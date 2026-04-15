@@ -2468,6 +2468,9 @@ export function useThreadActions({
               fileSizeBytes?: number;
             }) => {
               const id = `claude:${session.sessionId}`;
+              if (hiddenSharedBindingIds.has(id)) {
+                return;
+              }
               const prev = mergedById.get(id);
               const updatedAt = session.updatedAt;
               const next: ThreadSummary = {

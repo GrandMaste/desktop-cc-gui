@@ -3,6 +3,7 @@ import {
   clearSharedSessionBindingsForSharedThread,
   registerSharedSessionNativeBinding,
   rebindSharedSessionNativeThread,
+  resolvePendingSharedSessionBindingForEngine,
   resolveSharedSessionBindingByNativeThread,
 } from "./sharedSessionBridge";
 
@@ -48,5 +49,49 @@ describe("sharedSessionBridge", () => {
     expect(resolveSharedSessionBindingByNativeThread("ws-2", "claude-pending-shared-1")).toBeNull();
 
     clearSharedSessionBindingsForSharedThread("ws-2", "shared:thread-2");
+  });
+
+  it("resolves a unique pending binding for engine-level shared routing", () => {
+    registerSharedSessionNativeBinding({
+      workspaceId: "ws-3",
+      sharedThreadId: "shared:thread-3",
+      nativeThreadId: "codex-pending-shared-3",
+      engine: "codex",
+    });
+    expect(
+      resolvePendingSharedSessionBindingForEngine("ws-3", "codex")?.sharedThreadId,
+    ).toBe("shared:thread-3");
+    clearSharedSessionBindingsForSharedThread("ws-3", "shared:thread-3");
+  });
+
+  it("requires pending binding match to be unique", () => {
+    registerSharedSessionNativeBinding({
+      workspaceId: "ws-4",
+      sharedThreadId: "shared:thread-4a",
+      nativeThreadId: "codex-pending-shared-4a",
+      engine: "codex",
+    });
+    registerSharedSessionNativeBinding({
+      workspaceId: "ws-4",
+      sharedThreadId: "shared:thread-4b",
+      nativeThreadId: "codex-pending-shared-4b",
+      engine: "codex",
+    });
+    expect(resolvePendingSharedSessionBindingForEngine("ws-4", "codex")).toBeNull();
+    clearSharedSessionBindingsForSharedThread("ws-4", "shared:thread-4a");
+    clearSharedSessionBindingsForSharedThread("ws-4", "shared:thread-4b");
+  });
+
+  it("ignores stale pending bindings when resolving by engine", () => {
+    const now = Date.now();
+    registerSharedSessionNativeBinding({
+      workspaceId: "ws-5",
+      sharedThreadId: "shared:thread-5",
+      nativeThreadId: "codex-pending-shared-5",
+      engine: "codex",
+      registeredAtMs: now - 31_000,
+    });
+    expect(resolvePendingSharedSessionBindingForEngine("ws-5", "codex")).toBeNull();
+    clearSharedSessionBindingsForSharedThread("ws-5", "shared:thread-5");
   });
 });

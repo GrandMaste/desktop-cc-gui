@@ -3,7 +3,10 @@ import {
   sendSharedSessionMessage,
   setSharedSessionSelectedEngine,
 } from "../services/sharedSessions";
-import { registerSharedSessionNativeBinding } from "./sharedSessionBridge";
+import {
+  registerSharedSessionNativeBinding,
+  rebindSharedSessionNativeThread,
+} from "./sharedSessionBridge";
 
 export async function sendSharedSessionTurn(input: {
   workspaceId: string;
@@ -51,12 +54,32 @@ export async function sendSharedSessionTurn(input: {
   const nativeThreadId =
     typeof response?.nativeThreadId === "string" ? response.nativeThreadId.trim() : "";
   if (nativeThreadId) {
-    registerSharedSessionNativeBinding({
-      workspaceId: input.workspaceId,
-      sharedThreadId: input.threadId,
-      nativeThreadId,
-      engine: input.engine,
-    });
+    const shouldRebindSelectedThread =
+      selectedNativeThreadId &&
+      selectedNativeThreadId !== nativeThreadId &&
+      selectedNativeThreadId.startsWith(`${input.engine}-pending-shared-`);
+    if (shouldRebindSelectedThread) {
+      const rebound = rebindSharedSessionNativeThread({
+        workspaceId: input.workspaceId,
+        oldNativeThreadId: selectedNativeThreadId,
+        newNativeThreadId: nativeThreadId,
+      });
+      if (!rebound) {
+        registerSharedSessionNativeBinding({
+          workspaceId: input.workspaceId,
+          sharedThreadId: input.threadId,
+          nativeThreadId,
+          engine: input.engine,
+        });
+      }
+    } else {
+      registerSharedSessionNativeBinding({
+        workspaceId: input.workspaceId,
+        sharedThreadId: input.threadId,
+        nativeThreadId,
+        engine: input.engine,
+      });
+    }
   }
   return response;
 }

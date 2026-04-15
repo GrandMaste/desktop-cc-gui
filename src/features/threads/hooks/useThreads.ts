@@ -38,7 +38,10 @@ import {
 import { buildItemsFromThread } from "../../../utils/threadItems";
 import i18n from "../../../i18n";
 import { clearSharedSessionBindingsForSharedThread } from "../../shared-session/runtime/sharedSessionBridge";
-import { syncSharedSessionSnapshot as syncSharedSessionSnapshotService } from "../../shared-session/services/sharedSessions";
+import {
+  setSharedSessionSelectedEngine as setSharedSessionSelectedEngineService,
+  syncSharedSessionSnapshot as syncSharedSessionSnapshotService,
+} from "../../shared-session/services/sharedSessions";
 import { normalizeSharedSessionEngine } from "../../shared-session/utils/sharedSessionEngines";
 
 const AUTO_TITLE_REQUEST_TIMEOUT_MS = 8_000;
@@ -630,14 +633,31 @@ export function useThreads({
       threadId: string,
       engine: "claude" | "codex" | "gemini" | "opencode",
     ) => {
+      const sharedEngine = normalizeSharedSessionEngine(engine);
       dispatch({
         type: "setThreadEngine",
         workspaceId,
         threadId,
-        engine: normalizeSharedSessionEngine(engine),
+        engine: sharedEngine,
+      });
+      if (!threadId.startsWith("shared:")) {
+        return;
+      }
+      void setSharedSessionSelectedEngineService(
+        workspaceId,
+        threadId,
+        sharedEngine,
+      ).catch((error) => {
+        onDebug?.({
+          id: `${Date.now()}-shared-session-select-engine-error`,
+          timestamp: Date.now(),
+          source: "error",
+          label: "shared-session/select-engine error",
+          payload: error instanceof Error ? error.message : String(error),
+        });
       });
     },
-    [dispatch],
+    [dispatch, onDebug],
   );
 
   const resolvePendingThreadForSession = useCallback(
@@ -1642,6 +1662,14 @@ export function useThreads({
     Object.entries(state.threadsByWorkspace).forEach(([workspaceId, threads]) => {
       threads.forEach((thread) => {
         if (thread.threadKind !== "shared") {
+          return;
+        }
+        if (!loadedThreadsRef.current[thread.id]) {
+          const existingTimer = sharedSessionSyncTimerByThreadRef.current[thread.id];
+          if (existingTimer) {
+            clearTimeout(existingTimer);
+            sharedSessionSyncTimerByThreadRef.current[thread.id] = null;
+          }
           return;
         }
         const selectedEngine = normalizeSharedSessionEngine(

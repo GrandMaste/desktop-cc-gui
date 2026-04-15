@@ -202,4 +202,54 @@ describe("useThreadActions shared/native compatibility", () => {
       ).toBe(true);
     });
   });
+
+  it("hides claude native bindings owned by shared sessions from native thread list", async () => {
+    vi.mocked(listClaudeSessions).mockResolvedValue([
+      {
+        sessionId: "session-hidden",
+        firstMessage: "Hidden Claude Binding",
+        updatedAt: 1_730_000_340_000,
+      },
+      {
+        sessionId: "session-visible",
+        firstMessage: "Visible Claude Session",
+        updatedAt: 1_730_000_350_000,
+      },
+    ]);
+    vi.mocked(listSharedSessions).mockResolvedValue([
+      {
+        id: "shared-session-claude-1",
+        threadId: "shared:shared-session-claude-1",
+        title: "Shared Claude",
+        updatedAt: 1_730_000_360_000,
+        selectedEngine: "claude",
+        nativeThreadIds: ["claude:session-hidden"],
+      },
+    ]);
+
+    const { result, dispatch } = renderActions();
+
+    await act(async () => {
+      await result.current.listThreadsForWorkspace(workspace);
+    });
+
+    await waitFor(() => {
+      const setThreadsActions = vi.mocked(dispatch).mock.calls
+        .map(([action]) => action)
+        .filter((action) => action?.type === "setThreads");
+      expect(setThreadsActions.length).toBeGreaterThan(0);
+      expect(
+        setThreadsActions.some((action) => {
+          const threadIds = Array.isArray(action.threads)
+            ? action.threads.map((thread: { id: string }) => thread.id)
+            : [];
+          return (
+            threadIds.includes("shared:shared-session-claude-1") &&
+            threadIds.includes("claude:session-visible") &&
+            !threadIds.includes("claude:session-hidden")
+          );
+        }),
+      ).toBe(true);
+    });
+  });
 });
