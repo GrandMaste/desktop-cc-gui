@@ -23,6 +23,8 @@ import {
 } from "../../../services/tauri";
 import { getClientStoreSync, writeClientStoreValue } from "../../../services/clientStorage";
 import { pushErrorToast } from "../../../services/toasts";
+import { sendSharedSessionTurn } from "../../shared-session/runtime/sendSharedSessionTurn";
+import { setSharedSessionSelectedEngine } from "../../shared-session/services/sharedSessions";
 
 vi.mock("../../../services/toasts", () => ({
   pushErrorToast: vi.fn(),
@@ -54,6 +56,14 @@ vi.mock("../../../services/tauri", () => ({
 vi.mock("../../../services/clientStorage", () => ({
   getClientStoreSync: vi.fn(),
   writeClientStoreValue: vi.fn(),
+}));
+
+vi.mock("../../shared-session/runtime/sendSharedSessionTurn", () => ({
+  sendSharedSessionTurn: vi.fn(),
+}));
+
+vi.mock("../../shared-session/services/sharedSessions", () => ({
+  setSharedSessionSelectedEngine: vi.fn(),
 }));
 
 describe("useThreadMessaging", () => {
@@ -124,6 +134,10 @@ describe("useThreadMessaging", () => {
     vi.mocked(engineInterruptTurn).mockResolvedValue();
     vi.mocked(interruptTurn).mockResolvedValue({});
     vi.mocked(writeClientStoreValue).mockImplementation(() => undefined);
+    vi.mocked(sendSharedSessionTurn).mockResolvedValue({
+      result: { turn: { id: "shared-turn-1" } },
+    });
+    vi.mocked(setSharedSessionSelectedEngine).mockResolvedValue({});
   });
 
   function makeHook(
@@ -180,6 +194,8 @@ describe("useThreadMessaging", () => {
         getCustomName: () => undefined,
         getThreadEngine: (_workspaceId, threadId) =>
           overrides.threadEngineById?.[threadId] ?? undefined,
+        getThreadKind: (_workspaceId, threadId) =>
+          threadId.startsWith("shared:") ? "shared" : "native",
         markProcessing,
         markReviewing,
         setActiveTurnId,
@@ -226,6 +242,40 @@ describe("useThreadMessaging", () => {
       "ws-1",
       expect.objectContaining({ engine: "opencode" }),
     );
+    expect(sendUserMessage).not.toHaveBeenCalled();
+  });
+
+  it("normalizes unsupported shared-session sends back to claude", async () => {
+    const dispatch = vi.fn();
+    const { result } = makeHook("gemini", {
+      activeThreadId: "shared:thread-1",
+      dispatch,
+    });
+
+    await act(async () => {
+      await result.current.sendUserMessageToThread(
+        workspace,
+        "shared:thread-1",
+        "hello shared",
+      );
+    });
+
+    expect(sendSharedSessionTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceId: "ws-1",
+        threadId: "shared:thread-1",
+        engine: "claude",
+      }),
+    );
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "setThreadEngine",
+        threadId: "shared:thread-1",
+        engine: "claude",
+      }),
+    );
+    expect(setSharedSessionSelectedEngine).not.toHaveBeenCalled();
+    expect(engineSendMessage).not.toHaveBeenCalled();
     expect(sendUserMessage).not.toHaveBeenCalled();
   });
 

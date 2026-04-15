@@ -35,6 +35,7 @@ import Copy from "lucide-react/dist/esm/icons/copy";
 import FileText from "lucide-react/dist/esm/icons/file-text";
 import GitBranch from "lucide-react/dist/esm/icons/git-branch";
 import LayoutDashboard from "lucide-react/dist/esm/icons/layout-dashboard";
+import Layers3 from "lucide-react/dist/esm/icons/layers-3";
 import Lock from "lucide-react/dist/esm/icons/lock";
 import RefreshCw from "lucide-react/dist/esm/icons/refresh-cw";
 import Settings from "lucide-react/dist/esm/icons/settings";
@@ -88,6 +89,7 @@ type SidebarProps = {
   onSelectWorkspace: (id: string) => void;
   onConnectWorkspace: (workspace: WorkspaceInfo) => void;
   onAddAgent: (workspace: WorkspaceInfo, engine?: EngineType) => void;
+  onAddSharedAgent?: (workspace: WorkspaceInfo) => void;
   onAddWorktreeAgent: (workspace: WorkspaceInfo) => void;
   onAddCloneAgent: (workspace: WorkspaceInfo) => void;
   onToggleWorkspaceCollapse: (workspaceId: string, collapsed: boolean) => void;
@@ -163,6 +165,7 @@ export function Sidebar({
   onSelectWorkspace,
   onConnectWorkspace,
   onAddAgent,
+  onAddSharedAgent,
   onAddWorktreeAgent,
   onAddCloneAgent,
   onToggleWorkspaceCollapse,
@@ -256,6 +259,7 @@ export function Sidebar({
   } =
     useSidebarMenus({
       onAddAgent,
+      onAddSharedAgent,
       onDeleteThread,
       onSyncThread,
       onPinThread: pinThread,
@@ -300,6 +304,8 @@ export function Sidebar({
         return <EngineIcon engine="gemini" size={14} />;
       case "reload":
         return <RefreshCw size={13} />;
+      case "new-shared":
+        return <Layers3 size={13} />;
       case "remove":
         return <Trash2 size={13} />;
       case "new-worktree":

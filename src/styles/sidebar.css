@@ -2182,6 +2182,10 @@
   color: var(--text-strong);
 }
 
+.thread-engine-badge.thread-engine-shared {
+  color: #f59e0b;
+}
+
 .thread-engine-badge.is-processing {
   color: #ff9f43;
   opacity: 1;

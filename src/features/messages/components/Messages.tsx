@@ -192,6 +192,7 @@ function areMessageItemsEqual(
       previous.id === next.id &&
       previous.role === next.role &&
       previous.text === next.text &&
+      previous.engineSource === next.engineSource &&
       previous.isFinal === next.isFinal &&
       previous.finalCompletedAt === next.finalCompletedAt &&
       previous.finalDurationMs === next.finalDurationMs &&
@@ -531,6 +532,25 @@ function toConversationEngine(
     return engine;
   }
   return "codex";
+}
+
+function resolveProvenanceEngineLabel(
+  engineSource: string | null | undefined,
+): string | null {
+  const normalized = (engineSource ?? "").trim().toLowerCase();
+  if (normalized === "claude") {
+    return "Claude";
+  }
+  if (normalized === "gemini") {
+    return "Gemini";
+  }
+  if (normalized === "opencode") {
+    return "OpenCode";
+  }
+  if (normalized === "codex") {
+    return "Codex";
+  }
+  return null;
 }
 
 function resolveRenderableItems({
@@ -1017,9 +1037,15 @@ const MessageRow = memo(function MessageRow({
       })
       .filter(Boolean) as MessageImage[];
   }, [item.images]);
+  const provenanceLabel = resolveProvenanceEngineLabel(item.engineSource);
 
   const bubbleNode = (
     <div className={`bubble message-bubble${agentTaskNotification ? " message-bubble-agent-task" : ""}`}>
+      {item.role === "assistant" && provenanceLabel ? (
+        <div className="message-provenance-row">
+          <span className="message-provenance-badge">{provenanceLabel}</span>
+        </div>
+      ) : null}
       {agentTaskNotification && agentTaskDisplay ? (
         <div className="message-agent-task-card">
           <div className="message-agent-task-header">
@@ -1198,6 +1224,7 @@ const ReasoningRow = memo(function ReasoningRow({
     : isLive
     ? t("messages.thinkingProcess")
     : t("messages.thinkingLabel");
+  const provenanceLabel = resolveProvenanceEngineLabel(item.engineSource);
   return (
     <div className={`thinking-block${isExpanded ? " is-expanded" : ""}${isLive ? " is-live" : ""}`}>
       <button
@@ -1208,6 +1235,11 @@ const ReasoningRow = memo(function ReasoningRow({
         <span className="thinking-header-copy">
           <span className="codicon codicon-thinking thinking-glyph" aria-hidden />
           <span className="thinking-title">{title}</span>
+          {provenanceLabel ? (
+            <span className="message-provenance-badge thinking-provenance-badge">
+              {provenanceLabel}
+            </span>
+          ) : null}
         </span>
         <span
           className={`codicon thinking-icon ${isExpanded ? "codicon-chevron-down" : "codicon-chevron-right"}`}
@@ -2526,19 +2558,26 @@ export const Messages = memo(function Messages({
         return null;
       }
       const isExpanded = expandedItems.has(item.id);
+      const provenanceLabel = resolveProvenanceEngineLabel(item.engineSource);
       return (
-        <ToolBlockRenderer
-          key={`tool:${item.id}`}
-          item={item}
-          workspaceId={workspaceId}
-          isExpanded={isExpanded}
-          onToggle={toggleExpanded}
-          onRequestAutoScroll={requestAutoScroll}
-          activeCollaborationModeId={activeCollaborationModeId}
-          activeEngine={activeEngine}
-          hasPendingUserInputRequest={activeUserInputRequestId !== null}
-          onOpenDiffPath={onOpenDiffPath}
-        />
+        <div key={`tool:${item.id}`} className="message-tool-block-shell">
+          {provenanceLabel ? (
+            <div className="message-provenance-row">
+              <span className="message-provenance-badge">{provenanceLabel}</span>
+            </div>
+          ) : null}
+          <ToolBlockRenderer
+            item={item}
+            workspaceId={workspaceId}
+            isExpanded={isExpanded}
+            onToggle={toggleExpanded}
+            onRequestAutoScroll={requestAutoScroll}
+            activeCollaborationModeId={activeCollaborationModeId}
+            activeEngine={activeEngine}
+            hasPendingUserInputRequest={activeUserInputRequestId !== null}
+            onOpenDiffPath={onOpenDiffPath}
+          />
+        </div>
       );
     }
     if (item.kind === "explore") {

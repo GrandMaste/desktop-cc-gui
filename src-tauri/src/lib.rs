@@ -42,6 +42,7 @@ mod remote_backend;
 mod rules;
 mod runtime_log;
 mod settings;
+mod shared_sessions;
 mod shared;
 mod skills;
 mod startup_guard;

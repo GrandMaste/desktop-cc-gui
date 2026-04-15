@@ -53,6 +53,7 @@ type WorkspaceHomeProps = {
   recentThreads: WorkspaceHomeThreadSummary[];
   onSelectConversation: (workspaceId: string, threadId: string) => void;
   onStartConversation: (engine: EngineType) => Promise<void>;
+  onStartSharedConversation: (engine: EngineType) => Promise<void>;
   onContinueLatestConversation: () => void;
   onStartGuidedConversation: (prompt: string, engine: EngineType) => Promise<void>;
   onOpenSpecHub: () => void;
@@ -77,6 +78,7 @@ export function WorkspaceHome({
   recentThreads,
   onSelectConversation,
   onStartConversation,
+  onStartSharedConversation,
   onContinueLatestConversation,
   onStartGuidedConversation,
   onOpenSpecHub,
@@ -182,6 +184,18 @@ export function WorkspaceHome({
     setIsStartingConversation(true);
     try {
       await onStartConversation(startConversationEngine);
+    } finally {
+      setIsStartingConversation(false);
+    }
+  };
+
+  const handleStartSharedConversation = async () => {
+    if (isStartingConversation || !selectedEngineOption || selectedEngineOption.disabled) {
+      return;
+    }
+    setIsStartingConversation(true);
+    try {
+      await onStartSharedConversation(startConversationEngine);
     } finally {
       setIsStartingConversation(false);
     }
@@ -380,6 +394,23 @@ export function WorkspaceHome({
                   ? t("workspace.startingConversation")
                   : t("workspace.startConversation")}
               </span>
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="workspace-home-command-button workspace-home-command-button-secondary"
+              onClick={() => {
+                void handleStartSharedConversation();
+              }}
+              disabled={
+                isStartingConversation ||
+                !selectedEngineOption ||
+                selectedEngineOption.disabled
+              }
+            >
+              <MessagesSquare size={16} aria-hidden />
+              <span>{t("workspace.startSharedConversation")}</span>
             </Button>
             <Button
               type="button"

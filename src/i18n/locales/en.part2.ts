@@ -50,6 +50,7 @@ const enPart2 = {
     engineOpenCode: "OpenCode",
     engineComingSoon: "Coming soon",
     startConversation: "Start conversation",
+    startSharedConversation: "Start shared session",
     startingConversation: "Starting...",
     continueLatestConversation: "Continue latest conversation",
     guidedStart: "Spec and execution guides",
@@ -118,6 +119,7 @@ const enPart2 = {
     models: "{{count}} models",
     runs: "{{count}} runs",
     // Clone
+    newSharedSession: "New shared session",
     newCloneAgent: "New clone agent",
     createWorkingCopyOf: "Create a new working copy of \"{{name}}\".",
     copyName: "Copy name",

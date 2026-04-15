@@ -33,6 +33,8 @@ import {
   shareOpenCodeSession as shareOpenCodeSessionService,
   projectMemoryCaptureAuto as projectMemoryCaptureAutoService,
 } from "../../../services/tauri";
+import { setSharedSessionSelectedEngine as setSharedSessionSelectedEngineService } from "../../shared-session/services/sharedSessions";
+import { sendSharedSessionTurn } from "../../shared-session/runtime/sendSharedSessionTurn";
 import { projectMemoryFacade } from "../../project-memory/services/projectMemoryFacade";
 import {
   injectSelectedMemoriesContext,
@@ -57,6 +59,7 @@ import { formatRelativeTime } from "../../../utils/time";
 import { pushErrorToast } from "../../../services/toasts";
 import { resolveAgentIconForAgent } from "../../../utils/agentIcons";
 import { isValidModelId } from "../../composer/types/provider";
+import { normalizeSharedSessionEngine } from "../../shared-session/utils/sharedSessionEngines";
 import {
   clearPendingClaudeMcpOutputNotice,
   getClaudeMcpRuntimeSnapshot,
@@ -400,6 +403,10 @@ type UseThreadMessagingOptions = {
     workspaceId: string,
     threadId: string,
   ) => "claude" | "codex" | "gemini" | "opencode" | undefined;
+  getThreadKind?: (
+    workspaceId: string,
+    threadId: string,
+  ) => "native" | "shared";
   markProcessing: (threadId: string, isProcessing: boolean) => void;
   markReviewing: (threadId: string, isReviewing: boolean) => void;
   setActiveTurnId: (threadId: string, turnId: string | null) => void;
@@ -461,6 +468,7 @@ export function useThreadMessaging({
   dispatch,
   getCustomName,
   getThreadEngine,
+  getThreadKind,
   markProcessing,
   markReviewing,
   setActiveTurnId,
@@ -524,6 +532,12 @@ export function useThreadMessaging({
     [activeEngine, getThreadEngine, normalizeEngineSelection],
   );
 
+  const resolveThreadKind = useCallback(
+    (workspaceId: string, threadId: string): "native" | "shared" =>
+      getThreadKind?.(workspaceId, threadId) ?? "native",
+    [getThreadKind],
+  );
+
   const isThreadIdCompatibleWithEngine = useCallback(
     (
       engine: "claude" | "codex" | "gemini" | "opencode",
@@ -572,6 +586,7 @@ export function useThreadMessaging({
         return;
       }
       const resolvedEngine = resolveThreadEngine(workspace.id, threadId);
+      const threadKind = resolveThreadKind(workspace.id, threadId);
       dispatch({
         type: "ensureThread",
         workspaceId: workspace.id,
@@ -882,7 +897,7 @@ export function useThreadMessaging({
         (threadStatusById[threadId]?.isProcessing ?? false) && steerEnabled;
       const shouldAddOptimisticUserBubble =
         !options?.skipOptimisticUserBubble &&
-        (resolvedEngine === "codex" || wasProcessing);
+        (resolvedEngine === "codex" || wasProcessing || threadKind === "shared");
       let optimisticUserItem: Extract<ConversationItem, { kind: "message" }> | null = null;
       if (shouldAddOptimisticUserBubble) {
         const optimisticText = visibleUserText;
@@ -909,6 +924,10 @@ export function useThreadMessaging({
         }
       }
       const timestamp = Date.now();
+      const effectiveResolvedEngine =
+        threadKind === "shared"
+          ? normalizeSharedSessionEngine(resolvedEngine)
+          : resolvedEngine;
       recordThreadActivity(workspace.id, threadId, timestamp);
       dispatch({
         type: "setThreadTimestamp",
@@ -916,11 +935,11 @@ export function useThreadMessaging({
         threadId,
         timestamp,
       });
-      if (interruptedThreadsRef.current.has(threadId)) {
-        interruptedThreadsRef.current.delete(threadId);
-      }
-      markProcessing(threadId, true);
-      safeMessageActivity();
+        if (interruptedThreadsRef.current.has(threadId)) {
+          interruptedThreadsRef.current.delete(threadId);
+        }
+        markProcessing(threadId, true);
+        safeMessageActivity();
       onDebug?.({
         id: `${Date.now()}-client-turn-start`,
         timestamp: Date.now(),
@@ -929,7 +948,7 @@ export function useThreadMessaging({
         payload: {
           workspaceId: workspace.id,
           threadId,
-          engine: resolvedEngine,
+          engine: effectiveResolvedEngine,
           selectedEngine: activeEngine,
           text: finalText,
           images,
@@ -954,7 +973,7 @@ export function useThreadMessaging({
         console.info("[turn/start]", {
           workspaceId: workspace.id,
           threadId,
-          engine: resolvedEngine,
+          engine: effectiveResolvedEngine,
           selectedEngine: activeEngine,
           model: modelForSend,
           effort: resolvedEffort,
@@ -967,6 +986,40 @@ export function useThreadMessaging({
       }
       try {
         let response: Record<string, unknown>;
+
+        if (threadKind === "shared") {
+          const sharedResolvedEngine = normalizeSharedSessionEngine(resolvedEngine);
+          dispatch({
+            type: "setThreadEngine",
+            workspaceId: workspace.id,
+            threadId,
+            engine: sharedResolvedEngine,
+          });
+          response =
+            (await sendSharedSessionTurn({
+              workspaceId: workspace.id,
+              threadId,
+              engine: sharedResolvedEngine,
+              text: finalText,
+              model: modelForSend ?? null,
+              effort: resolvedEffort ?? null,
+              collaborationMode: sanitizedCollaborationMode,
+              accessMode: resolvedAccessMode,
+              images,
+              preferredLanguage: i18n.language.toLowerCase().startsWith("zh")
+                ? "zh"
+                : "en",
+              customSpecRoot: resolveWorkspaceSpecRoot(workspace.id),
+            })) as Record<string, unknown>;
+
+          onDebug?.({
+            id: `${Date.now()}-server-shared-turn-start`,
+            timestamp: Date.now(),
+            source: "server",
+            label: "shared-session/turn/start response",
+            payload: response,
+          });
+        } else {
 
         const isClaudeSession = threadId.startsWith("claude:");
         const isOpenCodeSession = threadId.startsWith("opencode:");
@@ -1412,6 +1465,7 @@ export function useThreadMessaging({
               console.warn("[project-memory] auto capture failed:", err);
             }
           });
+        }
       } catch (error) {
         const rawMessage = error instanceof Error ? error.message : String(error);
         const firstPacketTimeoutSeconds =
@@ -1521,11 +1575,25 @@ export function useThreadMessaging({
       const currentEngine = normalizeEngineSelection(activeEngine);
       if (activeThreadId) {
         const storedThreadEngine = getThreadEngine(activeWorkspace.id, activeThreadId);
+        const threadKind = resolveThreadKind(activeWorkspace.id, activeThreadId);
         const threadEngine = resolveThreadEngine(activeWorkspace.id, activeThreadId);
         const threadIdCompatible = isThreadIdCompatibleWithEngine(
           currentEngine,
           activeThreadId,
         );
+        if (threadKind === "shared") {
+          const sharedEngine = normalizeSharedSessionEngine(currentEngine);
+          void setSharedSessionSelectedEngineService(
+            activeWorkspace.id,
+            activeThreadId,
+            sharedEngine,
+          ).catch(() => {});
+          await sendMessageToThread(activeWorkspace, activeThreadId, finalText, images, {
+            ...options,
+            skipPromptExpansion: true,
+          });
+          return;
+        }
         // If current thread differs from current selection, or threadId prefix is incompatible, create a new thread.
         if (threadEngine !== currentEngine || !threadIdCompatible) {
           onDebug?.({

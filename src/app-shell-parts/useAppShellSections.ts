@@ -36,6 +36,7 @@ import { useAppMenuEvents } from "../features/app/hooks/useAppMenuEvents";
 import { useMenuAcceleratorController } from "../features/app/hooks/useMenuAcceleratorController";
 import { useMenuLocalization } from "../features/app/hooks/useMenuLocalization";
 import { isDefaultWorkspacePath } from "../features/workspaces/utils/defaultWorkspace";
+import { normalizeSharedSessionEngine } from "../features/shared-session/utils/sharedSessionEngines";
 import type { WorkspaceHomeDeleteResult } from "../features/workspaces/components/WorkspaceHome";
 import type { EngineType, MessageSendOptions, WorkspaceInfo } from "../types";
 import type { KanbanContextMode } from "../features/kanban/utils/contextMode";
@@ -172,6 +173,7 @@ export function useAppShellSections(ctx: any) {
     exitDiffView,
     connectWorkspace,
     startThreadForWorkspace,
+    startSharedSessionForWorkspace,
     setCenterMode,
     selectWorkspace,
     setActiveThreadId,
@@ -193,6 +195,7 @@ export function useAppShellSections(ctx: any) {
     recentThreads,
     collapseRightPanel,
     setActiveEngine,
+    updateSharedSessionEngineSelection,
     removeThread,
     clearDraftForThread,
     removeImagesForThread,
@@ -763,6 +766,60 @@ export function useAppShellSections(ctx: any) {
       setActiveEngine,
       setActiveThreadId,
       startThreadForWorkspace,
+    ],
+  );
+
+  const handleStartSharedConversation = useCallback(
+    async (engineOrWorkspace: EngineType | WorkspaceInfo = "claude") => {
+      const targetWorkspace =
+        typeof engineOrWorkspace === "object" && engineOrWorkspace !== null
+          ? engineOrWorkspace
+          : activeWorkspace;
+      if (!targetWorkspace) {
+        return;
+      }
+      const engine: EngineType =
+        typeof engineOrWorkspace === "string"
+          ? engineOrWorkspace
+          : activeEngine;
+      const sharedEngine = normalizeSharedSessionEngine(engine);
+      try {
+        setWorkspaceHomeWorkspaceId(null);
+        selectWorkspace(targetWorkspace.id);
+        if (!targetWorkspace.connected) {
+          await connectWorkspace(targetWorkspace);
+        }
+        await setActiveEngine(sharedEngine);
+        const threadId = await startSharedSessionForWorkspace(targetWorkspace.id, {
+          activate: true,
+          initialEngine: sharedEngine,
+        });
+        if (!threadId) {
+          return;
+        }
+        updateSharedSessionEngineSelection(targetWorkspace.id, threadId, sharedEngine);
+        setActiveThreadId(threadId, targetWorkspace.id);
+        collapseRightPanel();
+        if (isCompact) {
+          setActiveTab("codex");
+        }
+      } catch (error) {
+        alertError(error);
+      }
+    },
+    [
+      activeEngine,
+      activeWorkspace,
+      alertError,
+      collapseRightPanel,
+      connectWorkspace,
+      isCompact,
+      selectWorkspace,
+      setActiveEngine,
+      setActiveThreadId,
+      setActiveTab,
+      startSharedSessionForWorkspace,
+      updateSharedSessionEngineSelection,
     ],
   );
 
@@ -2129,6 +2186,7 @@ export function useAppShellSections(ctx: any) {
     handleRewindFromMessage,
     handleSelectWorkspaceInstance,
     handleStartWorkspaceConversation,
+    handleStartSharedConversation,
     handleContinueLatestConversation,
     handleStartGuidedConversation,
     handleRevealActiveWorkspace,

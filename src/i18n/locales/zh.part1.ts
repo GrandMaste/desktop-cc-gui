@@ -127,6 +127,7 @@ const zhPart1 = {
     clearSearch: "清除搜索",
     pinned: "已固定",
     newAgent: "新建会话",
+    newSharedSession: "新建共享会话",
     newWorktreeAgent: "新建工作树代理",
     newCloneAgent: "新建克隆代理",
     newWindow: "新建窗口",

@@ -95,6 +95,7 @@ type ComposerProps = {
   collaborationModesEnabled: boolean;
   selectedCollaborationModeId: string | null;
   onSelectCollaborationMode: (id: string | null) => void;
+  isSharedSession?: boolean;
   // Engine props
   engines?: EngineDisplayInfo[];
   selectedEngine?: EngineType;
@@ -779,6 +780,7 @@ export const Composer = memo(function Composer({
   collaborationModesEnabled: _collaborationModesEnabled,
   selectedCollaborationModeId: _selectedCollaborationModeId,
   onSelectCollaborationMode: _onSelectCollaborationMode,
+  isSharedSession = false,
   engines,
   selectedEngine,
   onSelectEngine,
@@ -1815,6 +1817,7 @@ export const Composer = memo(function Composer({
               onTextChange={handleTextChangeWithHistory}
               selectedModelId={selectedModelId}
               selectedEngine={selectedEngine}
+              isSharedSession={isSharedSession}
               engines={engines}
               onSelectEngine={onSelectEngine}
               models={models}

@@ -4,10 +4,19 @@ import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppServerEvent } from "../../../types";
 import { subscribeAppServerEvents } from "../../../services/events";
+import {
+  clearSharedSessionBindingsForSharedThread,
+  registerSharedSessionNativeBinding,
+} from "../../shared-session/runtime/sharedSessionBridge";
+import { updateSharedSessionNativeBinding as updateSharedSessionNativeBindingService } from "../../shared-session/services/sharedSessions";
 import { useAppServerEvents } from "./useAppServerEvents";
 
 vi.mock("../../../services/events", () => ({
   subscribeAppServerEvents: vi.fn(),
+}));
+
+vi.mock("../../shared-session/services/sharedSessions", () => ({
+  updateSharedSessionNativeBinding: vi.fn(() => Promise.resolve(null)),
 }));
 
 type Handlers = Parameters<typeof useAppServerEvents>[0];
@@ -1178,6 +1187,110 @@ describe("useAppServerEvents", () => {
       "opencode",
     );
 
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it("keeps codex shared-session native binding unchanged on thread/started", async () => {
+    const handlers: Handlers = {
+      onTurnCompleted: vi.fn(),
+    };
+    registerSharedSessionNativeBinding({
+      workspaceId: "ws-shared-codex",
+      sharedThreadId: "shared:thread-codex",
+      nativeThreadId: "codex-native-thread-1",
+      engine: "codex",
+    });
+    const { root } = await mount(handlers);
+
+    act(() => {
+      listener?.({
+        workspace_id: "ws-shared-codex",
+        message: {
+          method: "thread/started",
+          params: {
+            threadId: "codex-native-thread-1",
+            sessionId: "codex-native-thread-1",
+            engine: "codex",
+          },
+        },
+      });
+      listener?.({
+        workspace_id: "ws-shared-codex",
+        message: {
+          method: "turn/completed",
+          params: {
+            threadId: "codex-native-thread-1",
+            turnId: "turn-codex-1",
+          },
+        },
+      });
+    });
+
+    expect(updateSharedSessionNativeBindingService).not.toHaveBeenCalled();
+    expect(handlers.onTurnCompleted).toHaveBeenCalledWith(
+      "ws-shared-codex",
+      "shared:thread-codex",
+      "turn-codex-1",
+    );
+
+    clearSharedSessionBindingsForSharedThread("ws-shared-codex", "shared:thread-codex");
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it("rebinds non-codex shared-session native thread ids on thread/started", async () => {
+    const handlers: Handlers = {
+      onTurnCompleted: vi.fn(),
+    };
+    registerSharedSessionNativeBinding({
+      workspaceId: "ws-shared-claude",
+      sharedThreadId: "shared:thread-claude",
+      nativeThreadId: "claude-pending-shared-1",
+      engine: "claude",
+    });
+    const { root } = await mount(handlers);
+
+    act(() => {
+      listener?.({
+        workspace_id: "ws-shared-claude",
+        message: {
+          method: "thread/started",
+          params: {
+            threadId: "claude-pending-shared-1",
+            sessionId: "ses_123",
+            engine: "claude",
+          },
+        },
+      });
+      listener?.({
+        workspace_id: "ws-shared-claude",
+        message: {
+          method: "turn/completed",
+          params: {
+            threadId: "claude:ses_123",
+            turnId: "turn-claude-1",
+          },
+        },
+      });
+    });
+
+    expect(updateSharedSessionNativeBindingService).toHaveBeenCalledWith(
+      "ws-shared-claude",
+      "shared:thread-claude",
+      "claude",
+      "claude-pending-shared-1",
+      "claude:ses_123",
+    );
+    expect(handlers.onTurnCompleted).toHaveBeenCalledWith(
+      "ws-shared-claude",
+      "shared:thread-claude",
+      "turn-claude-1",
+    );
+
+    clearSharedSessionBindingsForSharedThread("ws-shared-claude", "shared:thread-claude");
     await act(async () => {
       root.unmount();
     });

@@ -11,6 +11,7 @@ export type WorkspaceMenuIconKind =
   | "engine-codex"
   | "engine-opencode"
   | "engine-gemini"
+  | "new-shared"
   | "reload"
   | "remove"
   | "new-worktree"
@@ -41,6 +42,7 @@ export type WorkspaceMenuState = {
 
 type SidebarMenuHandlers = {
   onAddAgent: (workspace: WorkspaceInfo, engine?: EngineType) => void;
+  onAddSharedAgent?: (workspace: WorkspaceInfo) => void;
   onDeleteThread: (workspaceId: string, threadId: string) => void;
   onSyncThread: (workspaceId: string, threadId: string) => void;
   onPinThread: (workspaceId: string, threadId: string) => void;
@@ -58,6 +60,7 @@ type SidebarMenuHandlers = {
 
 export function useSidebarMenus({
   onAddAgent,
+  onAddSharedAgent,
   onDeleteThread,
   onSyncThread,
   onPinThread,
@@ -204,6 +207,13 @@ export function useSidebarMenus({
           label: t("sidebar.sessionActionsGroup"),
           actions: [
             {
+              id: "new-session-shared",
+              label: t("sidebar.newSharedSession"),
+              iconKind: "new-shared",
+              unavailable: !onAddSharedAgent,
+              onSelect: () => onAddSharedAgent?.(workspace),
+            },
+            {
               id: "new-session-claude",
               label: t("workspace.engineClaudeCode"),
               iconKind: "engine-claude",
@@ -273,6 +283,7 @@ export function useSidebarMenus({
     [
       t,
       onAddAgent,
+      onAddSharedAgent,
       onReloadWorkspaceThreads,
       onDeleteWorkspace,
       onAddWorktreeAgent,

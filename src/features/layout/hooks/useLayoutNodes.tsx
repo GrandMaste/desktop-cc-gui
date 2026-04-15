@@ -210,6 +210,7 @@ type LayoutNodesOptions = {
   onSelectWorkspace: (workspaceId: string) => void;
   onConnectWorkspace: (workspace: WorkspaceInfo) => Promise<void>;
   onAddAgent: (workspace: WorkspaceInfo, engine?: EngineType) => Promise<void>;
+  onAddSharedAgent: (workspace: WorkspaceInfo) => Promise<void>;
   onAddWorktreeAgent: (workspace: WorkspaceInfo) => Promise<void>;
   onAddCloneAgent: (workspace: WorkspaceInfo) => Promise<void>;
   onToggleWorkspaceCollapse: (workspaceId: string, collapsed: boolean) => void;
@@ -1075,6 +1076,7 @@ export function useLayoutNodes(options: LayoutNodesOptions): LayoutNodesResult {
       onSelectWorkspace={options.onSelectWorkspace}
       onConnectWorkspace={options.onConnectWorkspace}
       onAddAgent={options.onAddAgent}
+      onAddSharedAgent={options.onAddSharedAgent}
       onAddWorktreeAgent={options.onAddWorktreeAgent}
       onAddCloneAgent={options.onAddCloneAgent}
       onToggleWorkspaceCollapse={options.onToggleWorkspaceCollapse}
@@ -1225,6 +1227,13 @@ export function useLayoutNodes(options: LayoutNodesOptions): LayoutNodesResult {
     isStatusPanelEngine &&
     options.bottomStatusPanelExpanded &&
     (hasStatusPanelActivity || options.bottomStatusPanelExpanded);
+  const activeThreadSummary =
+    options.activeWorkspaceId && options.activeThreadId
+      ? (options.threadsByWorkspace[options.activeWorkspaceId] ?? []).find(
+          (thread) => thread.id === options.activeThreadId,
+        ) ?? null
+      : null;
+  const isSharedSession = activeThreadSummary?.threadKind === "shared";
 
   const composerNode = options.showComposer ? (
     <Composer
@@ -1271,6 +1280,7 @@ export function useLayoutNodes(options: LayoutNodesOptions): LayoutNodesResult {
       collaborationModesEnabled={options.collaborationModesEnabled}
       selectedCollaborationModeId={options.selectedCollaborationModeId}
       onSelectCollaborationMode={options.onSelectCollaborationMode}
+      isSharedSession={isSharedSession}
       engines={options.engines}
       selectedEngine={options.selectedEngine}
       onSelectEngine={options.onSelectEngine}
