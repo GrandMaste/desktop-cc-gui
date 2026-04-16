@@ -2,6 +2,30 @@
 
 ---
 
+##### **2026年4月16日（v0.4.2）**
+
+中文：
+
+🐛 Fixes
+- 修复共享会话幕布中 assistant 重复输出与 fallback 误判
+- 提升 Codex/Claude 数学公式渲染与会话去重兼容性
+- 修复旧引擎正则兼容并增强跨平台命令稳定性
+- 修复焦点刷新反复触发 opencode 会话探测问题
+- 修复 Codex 选择智能体后用户消息双份回归
+- 对齐物理回溯截断并修复多轮回退错位
+
+English:
+
+🐛 Fixes
+- Fix duplicate assistant outputs and fallback misclassification in shared-session curtain rendering
+- Improve Codex/Claude math rendering compatibility and conversation de-duplication behavior
+- Fix legacy engine regex compatibility and harden cross-platform command stability
+- Fix repeated OpenCode session probing during focus refresh
+- Fix duplicated user messages after selecting an agent in Codex
+- Align physical rewind truncation and fix offset drift across multi-round rollback
+
+---
+
 ##### **2026年4月16日（v0.4.1）**
 
 中文：
