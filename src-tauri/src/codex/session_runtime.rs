@@ -169,8 +169,8 @@ pub(crate) async fn ensure_codex_session(
 #[cfg(test)]
 mod tests {
     use super::reuse_existing_session_if_healthy;
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
 
     #[tokio::test]
     async fn reuses_existing_session_when_probe_succeeds() {

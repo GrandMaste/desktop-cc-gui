@@ -22,6 +22,7 @@ export function useWorkspaceRestore({
   listThreadsForWorkspace,
 }: WorkspaceRestoreOptions) {
   const restoredWorkspaces = useRef(new Set<string>());
+  const restoringWorkspaces = useRef(new Set<string>());
 
   useEffect(() => {
     if (!hasLoaded) {
@@ -29,6 +30,9 @@ export function useWorkspaceRestore({
     }
     const pending = workspaces.filter((workspace) => {
       if (restoredWorkspaces.current.has(workspace.id)) {
+        return false;
+      }
+      if (restoringWorkspaces.current.has(workspace.id)) {
         return false;
       }
       if (workspace.id === activeWorkspaceId) {
@@ -40,7 +44,7 @@ export function useWorkspaceRestore({
       return;
     }
     pending.forEach((workspace) => {
-      restoredWorkspaces.current.add(workspace.id);
+      restoringWorkspaces.current.add(workspace.id);
     });
     const active = pending.find((w) => w.id === activeWorkspaceId);
     const rest = pending.filter((w) => w.id !== activeWorkspaceId);
@@ -49,20 +53,31 @@ export function useWorkspaceRestore({
       if (cancelled) {
         return;
       }
-      if (!restoreThreadsOnlyOnLaunch && !workspace.connected) {
-        await connectWorkspace(workspace);
+      try {
+        if (!restoreThreadsOnlyOnLaunch && !workspace.connected) {
+          await connectWorkspace(workspace);
+        }
+        await listThreadsForWorkspace(workspace);
+        if (!cancelled) {
+          restoredWorkspaces.current.add(workspace.id);
+        }
+      } finally {
+        restoringWorkspaces.current.delete(workspace.id);
       }
-      await listThreadsForWorkspace(workspace);
     };
     void (async () => {
-      try {
-        if (active) {
-          await restoreOne(active);
-        }
-        await Promise.allSettled(rest.map((w) => restoreOne(w).catch(() => {})));
-      } catch {
-        // Silent: connection errors show in debug panel.
+      if (active) {
+        await restoreOne(active).catch(() => {
+          // Silent: connection errors show in debug panel.
+        });
       }
+      await Promise.allSettled(
+        rest.map((workspace) =>
+          restoreOne(workspace).catch(() => {
+            // Silent: connection errors show in debug panel.
+          }),
+        ),
+      );
     })();
     return () => {
       cancelled = true;

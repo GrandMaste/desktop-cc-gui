@@ -1,5 +1,6 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -32,7 +33,19 @@ fn write_json_atomically(path: &Path, content: &str) -> Result<(), String> {
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
     let temp_path = path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
-    fs::write(&temp_path, content).map_err(|error| error.to_string())?;
+    let mut temp_file = fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&temp_path)
+        .map_err(|error| error.to_string())?;
+    temp_file
+        .write_all(content.as_bytes())
+        .map_err(|error| error.to_string())?;
+    temp_file.sync_all().map_err(|error| error.to_string())?;
+    #[cfg(target_os = "windows")]
+    if path.exists() {
+        fs::remove_file(path).map_err(|error| error.to_string())?;
+    }
     fs::rename(&temp_path, path).map_err(|error| error.to_string())?;
     Ok(())
 }
@@ -1741,11 +1754,13 @@ fn build_process_diagnostics(
 mod tests {
     use super::{
         build_engine_observability, is_engine_root_process, parse_process_rows_unix_output,
-        parse_process_rows_windows_payload, ProcessSnapshotRow, RuntimeEngineObservability,
-        RuntimeManager, RuntimeProcessDiagnostics, RuntimeState,
+        parse_process_rows_windows_payload, write_json_atomically, ProcessSnapshotRow,
+        RuntimeEngineObservability, RuntimeManager, RuntimeProcessDiagnostics, RuntimeState,
     };
     use crate::types::{AppSettings, WorkspaceEntry, WorkspaceKind, WorkspaceSettings};
     use serde_json::json;
+    use std::fs;
+    use uuid::Uuid;
 
     fn workspace_entry(id: &str) -> WorkspaceEntry {
         let mut settings = WorkspaceSettings::default();
@@ -1922,5 +1937,21 @@ mod tests {
         assert_eq!(rows[0].command, "node.exe");
         assert!(rows[0].args.contains("codex app-server"));
         assert_eq!(rows[1].args, "codex.exe");
+    }
+
+    #[test]
+    fn write_json_atomically_replaces_existing_file() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("mossx-runtime-ledger-{}", Uuid::new_v4()));
+        fs::create_dir_all(&temp_dir).expect("create temp dir");
+        let path = temp_dir.join("runtime-pool-ledger.json");
+
+        fs::write(&path, "{\"old\":true}").expect("seed existing file");
+        write_json_atomically(&path, "{\"new\":true}").expect("replace existing file");
+
+        let persisted = fs::read_to_string(&path).expect("read persisted file");
+        assert_eq!(persisted, "{\"new\":true}");
+
+        let _ = fs::remove_dir_all(&temp_dir);
     }
 }

@@ -1252,6 +1252,14 @@ fn default_codex_warm_ttl_seconds() -> u16 {
     120
 }
 
+impl AppSettings {
+    pub(crate) fn sanitize_runtime_pool_settings(&mut self) {
+        self.codex_max_hot_runtimes = self.codex_max_hot_runtimes.clamp(0, 8);
+        self.codex_max_warm_runtimes = self.codex_max_warm_runtimes.clamp(0, 16);
+        self.codex_warm_ttl_seconds = self.codex_warm_ttl_seconds.clamp(15, 3600);
+    }
+}
+
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
@@ -1539,6 +1547,20 @@ mod tests {
             decoded.workspace_groups[0].copies_folder.as_deref(),
             Some("/tmp/group-copies")
         );
+    }
+
+    #[test]
+    fn app_settings_sanitize_runtime_pool_settings_clamps_budget_fields() {
+        let mut settings = AppSettings::default();
+        settings.codex_max_hot_runtimes = 200;
+        settings.codex_max_warm_runtimes = 99;
+        settings.codex_warm_ttl_seconds = 1;
+
+        settings.sanitize_runtime_pool_settings();
+
+        assert_eq!(settings.codex_max_hot_runtimes, 8);
+        assert_eq!(settings.codex_max_warm_runtimes, 16);
+        assert_eq!(settings.codex_warm_ttl_seconds, 15);
     }
 
     #[test]
