@@ -1132,3 +1132,57 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 21: 压缩 runtime 预算卡片布局
+
+**Date**: 2026-04-18
+**Task**: 压缩 runtime 预算卡片布局
+**Branch**: `feature/vvvv0.4.3`
+
+### Summary
+
+(Add summary)
+
+### Main Changes
+
+任务目标:
+- 继续收紧 Runtime Pool Console 的预算卡布局，把三项配置压成一行，并把保存/刷新按钮提到卡片右上角。
+- 保持现有运行时逻辑不变，只做 UI 排版和文案语义收口。
+
+主要改动:
+- 将 Codex runtime 实例预算卡改为更紧凑的一行三列布局，缩小 label、input、help 文案占用空间。
+- 把保存/刷新按钮移动到预算卡头部右上角，形成更像工具条的极简控制区。
+- 继续弱化预算卡的表单感，明确 runtime 实例预算与聊天线程数量的区别，并补充操作文案说明。
+
+涉及模块:
+- src/features/settings/components/settings-view/sections/RuntimePoolSection.tsx
+- src/i18n/locales/zh.part1.ts
+- src/i18n/locales/en.part1.ts
+
+验证结果:
+- npx eslint src/features/settings/components/settings-view/sections/RuntimePoolSection.tsx src/i18n/locales/zh.part1.ts src/i18n/locales/en.part1.ts
+- npm run typecheck
+- npm run check:large-files
+
+后续事项:
+- 仓库仍存在与本次提交无关的未提交变更：openspec/changes/runtime-orchestrator-pool-console/* 与 src-tauri/src/types.rs，未纳入本次 commit。
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `e8a71ebb` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
