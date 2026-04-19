@@ -1707,3 +1707,64 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 31: 修复消息区 runtime 重连重发边界并完成代码清理
+
+**Date**: 2026-04-19
+**Task**: 修复消息区 runtime 重连重发边界并完成代码清理
+**Branch**: `feature/vvvv0.4.3`
+
+### Summary
+
+(Add summary)
+
+### Main Changes
+
+任务目标:
+- 对当前工作区进行全面 review，重点检查 runtime reconnect 卡片、上一条提示词重发、边界条件和大文件治理
+- 按用户反馈完成代码清理，去掉无效的重连成功提示并保留双按钮能力
+
+主要改动:
+- 新增 reconnect 卡片的“重连并发送上一条提示词”能力，同时保留原有仅重连按钮
+- 修复上一条提示词选择错误，改为只回溯 reconnect 错误之前最近的一条 user message
+- 在恢复并重发时复用 refreshThread 与 sendUserMessageToThread，避免重复 optimistic user bubble 和顶部残留消息
+- 下沉 runtime reconnect 纯逻辑 helper，压低 Messages.tsx 行数并通过 large-file 检查
+- 清理未生效的 success 提示分支与对应文案噪音
+- 补充 reconnect、Windows pipe error、nearest previous prompt、resend unavailable 等回归测试
+
+涉及模块:
+- src/features/messages/components
+- src/app-shell-parts/useAppShellLayoutNodesSection.tsx
+- src/features/layout/hooks/useLayoutNodes.tsx
+- src/i18n/locales/*
+- src/styles/messages.css
+- src/types.ts
+
+验证结果:
+- npm run typecheck 通过
+- npx vitest run src/features/messages/components/Messages.runtime-reconnect.test.tsx src/services/toasts.test.ts 通过
+- npm run check:large-files 通过
+- npm run lint 无 error，但仓库存在既有 react-hooks/exhaustive-deps warnings，本次未扩散处理
+
+后续事项:
+- 如需继续收口仓库级 lint warnings，可另开一轮按模块治理 react-hooks/exhaustive-deps 历史告警
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `864c0c9bb4bd03d444087b5455af5d90ccad7c71` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
