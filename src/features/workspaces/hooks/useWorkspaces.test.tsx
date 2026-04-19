@@ -5,6 +5,7 @@ import type { WorkspaceInfo } from "../../../types";
 import { writeClientStoreData, writeClientStoreValue } from "../../../services/clientStorage";
 import {
   addWorkspace,
+  ensureRuntimeReady,
   listWorkspaces,
   renameWorktree,
   renameWorktreeUpstream,
@@ -19,7 +20,7 @@ vi.mock("../../../services/tauri", () => ({
   addClone: vi.fn(),
   addWorkspace: vi.fn(),
   addWorktree: vi.fn(),
-  connectWorkspace: vi.fn(),
+  ensureRuntimeReady: vi.fn(),
   isWorkspacePathDir: vi.fn(),
   pickWorkspacePath: vi.fn(),
   removeWorkspace: vi.fn(),
@@ -283,6 +284,26 @@ describe("useWorkspaces.addWorkspaceFromPath", () => {
     expect(addWorkspaceMock).not.toHaveBeenCalled();
     expect(result.current.workspaces).toHaveLength(1);
     expect(result.current.activeWorkspaceId).toBe("workspace-existing");
+  });
+});
+
+describe("useWorkspaces.connectWorkspace", () => {
+  it("routes workspace acquire through ensureRuntimeReady", async () => {
+    vi.mocked(listWorkspaces).mockResolvedValue([workspaceOne]);
+    const ensureRuntimeReadyMock = vi.mocked(ensureRuntimeReady);
+    ensureRuntimeReadyMock.mockResolvedValue(undefined);
+
+    const { result } = renderHook(() => useWorkspaces());
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      await result.current.connectWorkspace(workspaceOne);
+    });
+
+    expect(ensureRuntimeReadyMock).toHaveBeenCalledWith(workspaceOne.id);
   });
 });
 

@@ -77,8 +77,7 @@ async fn spawn_reloaded_codex_sessions(
             Ok(session) => session,
             Err(error) => {
                 for (_, staged_session) in staged_sessions {
-                    let mut child = staged_session.child.lock().await;
-                    let _ = child.kill().await;
+                    let _ = crate::runtime::terminate_workspace_session(staged_session, None).await;
                 }
                 return Err(format!("spawn workspace {} failed: {error}", entry.id));
             }
@@ -115,6 +114,7 @@ pub(crate) async fn update_app_settings(
             &state.workspaces,
             &state.sessions,
             &state.app_settings,
+            Some(&state.runtime_manager),
             |entry, default_bin, codex_args, codex_home| {
                 crate::backend::app_server::spawn_workspace_session(
                     entry,
@@ -178,19 +178,15 @@ pub(crate) async fn reload_codex_runtime_config(
     }
 
     let restarted_sessions = staged_sessions.len();
-    let mut replaced_sessions = Vec::new();
-    {
-        let mut sessions = state.sessions.lock().await;
-        for (workspace_id, new_session) in staged_sessions {
-            if let Some(old_session) = sessions.insert(workspace_id, new_session) {
-                replaced_sessions.push(old_session);
-            }
-        }
-    }
-
-    for old_session in replaced_sessions {
-        let mut child = old_session.child.lock().await;
-        let _ = child.kill().await;
+    for (workspace_id, new_session) in staged_sessions {
+        crate::runtime::replace_workspace_session(
+            &state.sessions,
+            Some(&state.runtime_manager),
+            workspace_id,
+            new_session,
+            "reload-runtime-config",
+        )
+        .await?;
     }
 
     Ok(CodexRuntimeReloadResult {

@@ -554,6 +554,56 @@ async fn delete_codex_session_for_workspace_physically_removes_matching_file() {
 }
 
 #[tokio::test]
+async fn delete_codex_sessions_for_workspace_reuses_single_scan_for_multiple_targets() {
+    let codex_home = std::env::temp_dir().join(format!("codex-home-{}", Uuid::new_v4()));
+    let sessions_root = codex_home.join("sessions");
+    let day_key = "2026-01-19";
+    let session_path_a = write_named_session_file(
+        &sessions_root,
+        day_key,
+        "rollout-2026-01-19T12-00-00-session-alpha",
+        &[r#"{"timestamp":"2026-01-19T12:00:00.000Z","type":"session_meta","payload":{"id":"session-alpha","cwd":"/tmp/project-alpha"}}"#
+            .to_string()],
+    );
+    let session_path_b = write_named_session_file(
+        &sessions_root,
+        day_key,
+        "rollout-2026-01-19T12-05-00-session-beta",
+        &[r#"{"timestamp":"2026-01-19T12:05:00.000Z","type":"session_meta","payload":{"id":"session-beta","cwd":"/tmp/project-alpha"}}"#
+            .to_string()],
+    );
+
+    let mut settings = WorkspaceSettings::default();
+    settings.codex_home = Some(codex_home.to_string_lossy().to_string());
+    let entry = WorkspaceEntry {
+        id: "workspace-id".to_string(),
+        name: "workspace".to_string(),
+        path: "/tmp/project-alpha".to_string(),
+        codex_bin: None,
+        kind: WorkspaceKind::Main,
+        parent_id: None,
+        worktree: None,
+        settings,
+    };
+    let mut workspace_map = HashMap::new();
+    workspace_map.insert(entry.id.clone(), entry);
+    let workspaces = Mutex::new(workspace_map);
+
+    let deleted = delete_codex_sessions_for_workspace(
+        &workspaces,
+        "workspace-id",
+        &["session-alpha".to_string(), "session-beta".to_string()],
+    )
+    .await
+    .expect("batch delete codex sessions");
+
+    assert_eq!(deleted.len(), 2);
+    assert!(deleted.iter().all(|result| result.deleted));
+    assert!(!session_path_a.exists());
+    assert!(!session_path_b.exists());
+}
+
+#[tokio::test]
 async fn delete_codex_session_for_workspace_rejects_ambiguous_unknown_candidates() {
     let codex_home = std::env::temp_dir().join(format!("codex-home-{}", Uuid::new_v4()));
     let sessions_root = codex_home.join("sessions");
@@ -1241,6 +1291,31 @@ fn parse_codex_session_summary_reads_nested_session_meta_cwd() {
                     .to_string(),
             ],
         );
+
+    let summary = parse_codex_session_summary(session_path.as_path(), Some(workspace_path))
+        .expect("parse summary")
+        .expect("summary exists");
+
+    assert_eq!(summary.source.as_deref(), Some("custom"));
+    assert_eq!(summary.provider.as_deref(), Some("openai"));
+}
+
+#[test]
+fn parse_codex_session_summary_reads_root_session_meta_cwd() {
+    let root = make_temp_sessions_root();
+    let day_key = "2026-01-19";
+    let workspace_path = Path::new("/tmp/project-alpha");
+    let session_path = write_named_session_file(
+        &root,
+        day_key,
+        "session-root-meta-cwd",
+        &[
+            r#"{"timestamp":"2026-01-19T12:00:00.000Z","type":"session_meta","sessionMeta":{"cwd":"/tmp/project-alpha"},"payload":{"source":"custom","provider":"openai"}}"#
+                .to_string(),
+            r#"{"timestamp":"2026-01-19T12:00:01.000Z","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":12,"cached_input_tokens":0,"output_tokens":4}}}}"#
+                .to_string(),
+        ],
+    );
 
     let summary = parse_codex_session_summary(session_path.as_path(), Some(workspace_path))
         .expect("parse summary")

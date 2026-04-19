@@ -4,10 +4,12 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use tokio::sync::Mutex;
+use tokio::time::Duration;
 
 use crate::backend::app_server::WorkspaceSession;
 use crate::codex::args::resolve_workspace_codex_args;
 use crate::codex::home::resolve_workspace_codex_home;
+use crate::runtime::RuntimeAcquireGate;
 use crate::storage::{write_workspaces, write_workspaces_preserving_existing};
 use crate::types::{
     AppSettings, WorkspaceEntry, WorkspaceInfo, WorkspaceKind, WorkspaceSettings, WorktreeInfo,
@@ -20,6 +22,7 @@ pub(crate) const WORKTREE_SETUP_MARKER_EXT: &str = "ran";
 const WORKTREE_VALIDATION_ERROR_PREFIX: &str = "VALIDATION_ERROR";
 const LEGACY_BRAND_WORKSPACE_NAMES: &[&str] = &["codemoss", "ccgui"];
 const CURRENT_BRAND_WORKSPACE_NAME: &str = "ccgui";
+const SESSION_HEALTH_PROBE_TIMEOUT_SECS: u64 = 3;
 
 pub(crate) fn normalize_setup_script(script: Option<String>) -> Option<String> {
     match script {
@@ -137,6 +140,7 @@ pub(crate) async fn restart_all_connected_sessions_core<F, Fut>(
     workspaces: &Mutex<HashMap<String, WorkspaceEntry>>,
     sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
     app_settings: &Mutex<AppSettings>,
+    runtime_manager: Option<&Arc<crate::runtime::RuntimeManager>>,
     spawn_session: F,
 ) -> Result<(), String>
 where
@@ -174,10 +178,14 @@ where
         );
         let codex_home = resolve_workspace_codex_home(&entry, parent_entry.as_ref());
         let new_session = spawn_session(entry.clone(), default_bin, codex_args, codex_home).await?;
-        if let Some(old_session) = sessions.lock().await.insert(entry.id.clone(), new_session) {
-            let mut child = old_session.child.lock().await;
-            let _ = child.kill().await;
-        }
+        crate::runtime::replace_workspace_session(
+            sessions,
+            runtime_manager.map(|manager| manager.as_ref()),
+            entry.id.clone(),
+            new_session,
+            "settings-restart",
+        )
+        .await?;
     }
     Ok(())
 }
@@ -301,12 +309,18 @@ where
             let mut workspaces = workspaces.lock().await;
             workspaces.remove(&entry.id);
         }
-        let mut child = session.child.lock().await;
-        let _ = child.kill().await;
+        let _ = crate::runtime::terminate_workspace_session(session, None).await;
         return Err(error);
     }
 
-    sessions.lock().await.insert(entry.id.clone(), session);
+    crate::runtime::replace_workspace_session(
+        sessions,
+        None,
+        entry.id.clone(),
+        session,
+        "workspace-add",
+    )
+    .await?;
 
     Ok(WorkspaceInfo {
         id: entry.id,
@@ -551,7 +565,14 @@ where
             .collect();
     }
 
-    sessions.lock().await.insert(entry.id.clone(), session);
+    crate::runtime::replace_workspace_session(
+        sessions,
+        None,
+        entry.id.clone(),
+        session,
+        "worktree-add",
+    )
+    .await?;
 
     Ok(WorkspaceInfo {
         id: entry.id,
@@ -571,6 +592,7 @@ pub(crate) async fn connect_workspace_core<F, Fut>(
     workspaces: &Mutex<HashMap<String, WorkspaceEntry>>,
     sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
     app_settings: &Mutex<AppSettings>,
+    runtime_manager: Option<&Arc<crate::runtime::RuntimeManager>>,
     spawn_session: F,
 ) -> Result<(), String>
 where
@@ -578,6 +600,52 @@ where
     Fut: Future<Output = Result<Arc<WorkspaceSession>, String>>,
 {
     let (entry, parent_entry) = resolve_entry_and_parent(workspaces, &workspace_id).await?;
+    loop {
+        let existing_session = {
+            let sessions = sessions.lock().await;
+            sessions.get(&workspace_id).cloned()
+        };
+        if let Some(session) = existing_session {
+            match session
+                .probe_health(Duration::from_secs(SESSION_HEALTH_PROBE_TIMEOUT_SECS))
+                .await
+            {
+                Ok(()) => {
+                    if let Some(runtime_manager) = runtime_manager {
+                        runtime_manager
+                            .touch("codex", &workspace_id, "connect")
+                            .await;
+                    }
+                    return Ok(());
+                }
+                Err(error) => {
+                    log::warn!(
+                        "[connect_workspace_core] stale session detected for workspace {}: {}",
+                        workspace_id,
+                        error
+                    );
+                    disconnect_workspace_session_core(sessions, runtime_manager, &workspace_id)
+                        .await;
+                }
+            }
+        }
+
+        let Some(runtime_manager) = runtime_manager else {
+            break;
+        };
+        match runtime_manager
+            .begin_runtime_acquire("codex", &workspace_id)
+            .await
+        {
+            RuntimeAcquireGate::Leader => break,
+            RuntimeAcquireGate::Waiter(notify) => notify.notified().await,
+        }
+    }
+    if let Some(runtime_manager) = runtime_manager {
+        runtime_manager
+            .record_starting(&entry, "codex", "connect")
+            .await;
+    }
     let (default_bin, codex_args) = {
         let settings = app_settings.lock().await;
         (
@@ -586,18 +654,51 @@ where
         )
     };
     let codex_home = resolve_workspace_codex_home(&entry, parent_entry.as_ref());
-    let session = spawn_session(entry.clone(), default_bin, codex_args, codex_home).await?;
-    sessions.lock().await.insert(entry.id, session);
-    Ok(())
+    let spawn_result = spawn_session(entry.clone(), default_bin, codex_args, codex_home).await;
+    let session = match spawn_result {
+        Ok(session) => session,
+        Err(error) => {
+            if let Some(runtime_manager) = runtime_manager {
+                runtime_manager
+                    .record_failure(&entry, "codex", "connect", error.clone())
+                    .await;
+                runtime_manager
+                    .finish_runtime_acquire("codex", &workspace_id)
+                    .await;
+            }
+            return Err(error);
+        }
+    };
+    if let Some(runtime_manager) = runtime_manager {
+        session.attach_runtime_manager(runtime_manager.clone());
+    }
+    let replace_result = crate::runtime::replace_workspace_session(
+        sessions,
+        runtime_manager.map(|manager| manager.as_ref()),
+        entry.id,
+        session,
+        "connect",
+    )
+    .await;
+    if let Some(runtime_manager) = runtime_manager {
+        runtime_manager
+            .finish_runtime_acquire("codex", &workspace_id)
+            .await;
+    }
+    replace_result
 }
 
 pub(crate) async fn disconnect_workspace_session_core(
     sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
+    runtime_manager: Option<&Arc<crate::runtime::RuntimeManager>>,
     id: &str,
 ) {
+    if let Some(runtime_manager) = runtime_manager {
+        let _ = crate::runtime::stop_workspace_session(sessions, runtime_manager, id).await;
+        return;
+    }
     if let Some(session) = sessions.lock().await.remove(id) {
-        let mut child = session.child.lock().await;
-        let _ = child.kill().await;
+        let _ = crate::runtime::terminate_workspace_session(session, None).await;
     }
 }
 
@@ -665,7 +766,7 @@ where
             }
         }
 
-        disconnect_workspace_session_core(sessions, &child.id).await;
+        disconnect_workspace_session_core(sessions, None, &child.id).await;
         removed_child_ids.push(child.id.clone());
     }
 
@@ -673,7 +774,7 @@ where
 
     let mut ids_to_remove = removed_child_ids;
     if failures.is_empty() || !require_all_children_removed_to_remove_parent {
-        disconnect_workspace_session_core(sessions, &id).await;
+        disconnect_workspace_session_core(sessions, None, &id).await;
         ids_to_remove.push(id.clone());
     }
 
@@ -757,7 +858,7 @@ where
     }
     let _ = run_git_command(&parent_path, &["worktree", "prune", "--expire", "now"]).await;
 
-    disconnect_workspace_session_core(sessions, &entry.id).await;
+    disconnect_workspace_session_core(sessions, None, &entry.id).await;
 
     {
         let mut workspaces = workspaces.lock().await;
@@ -899,7 +1000,7 @@ where
 
     let was_connected = sessions.lock().await.contains_key(&entry_snapshot.id);
     if was_connected {
-        disconnect_workspace_session_core(sessions, &entry_snapshot.id).await;
+        disconnect_workspace_session_core(sessions, None, &entry_snapshot.id).await;
         let (default_bin, codex_args) = {
             let settings = app_settings.lock().await;
             (
@@ -1148,14 +1249,14 @@ where
                 return Err(error);
             }
         };
-        if let Some(old_session) = sessions
-            .lock()
-            .await
-            .insert(entry_snapshot.id.clone(), new_session)
-        {
-            let mut child = old_session.child.lock().await;
-            let _ = child.kill().await;
-        }
+        crate::runtime::replace_workspace_session(
+            sessions,
+            None,
+            entry_snapshot.id.clone(),
+            new_session,
+            "workspace-settings",
+        )
+        .await?;
     }
     if codex_home_changed || codex_args_changed {
         let app_settings_snapshot = app_settings.lock().await.clone();
@@ -1197,10 +1298,14 @@ where
                     continue;
                 }
             };
-            if let Some(old_session) = sessions.lock().await.insert(child.id.clone(), new_session) {
-                let mut child = old_session.child.lock().await;
-                let _ = child.kill().await;
-            }
+            crate::runtime::replace_workspace_session(
+                sessions,
+                None,
+                child.id.clone(),
+                new_session,
+                "workspace-settings-child",
+            )
+            .await?;
         }
     }
     if worktree_setup_script_changed && !entry_snapshot.kind.is_worktree() {

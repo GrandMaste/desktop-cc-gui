@@ -200,6 +200,7 @@ export function useAppShellSections(ctx: any) {
     setActiveEngine,
     updateSharedSessionEngineSelection,
     removeThread,
+    removeThreads,
     clearDraftForThread,
     removeImagesForThread,
     t,
@@ -969,18 +970,20 @@ export function useAppShellSections(ctx: any) {
           failed: [],
         };
       }
+      const deleteResults = removeThreads
+        ? await removeThreads(workspaceId, threadIds)
+        : await Promise.all(threadIds.map((threadId) => removeThread(workspaceId, threadId)));
       const succeededThreadIds: string[] = [];
       const failed: Array<{ threadId: string; code: string; message: string }> = [];
-      for (const threadId of threadIds) {
-        const result = await removeThread(workspaceId, threadId);
+      for (const result of deleteResults) {
         if (result.success) {
-          succeededThreadIds.push(threadId);
-          clearDraftForThread(threadId);
-          removeImagesForThread(threadId);
+          succeededThreadIds.push(result.threadId);
+          clearDraftForThread(result.threadId);
+          removeImagesForThread(result.threadId);
           continue;
         }
         failed.push({
-          threadId,
+          threadId: result.threadId,
           code: result.code ?? "UNKNOWN",
           message: result.message ?? t("workspace.deleteConversationFailed"),
         });
@@ -990,7 +993,7 @@ export function useAppShellSections(ctx: any) {
         failed,
       };
     },
-    [clearDraftForThread, removeImagesForThread, removeThread, t],
+    [clearDraftForThread, removeImagesForThread, removeThread, removeThreads, t],
   );
 
   const kanbanTasksRef = useRef(kanbanTasks);

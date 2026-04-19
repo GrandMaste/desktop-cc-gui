@@ -12,7 +12,7 @@ import {
   addClone as addCloneService,
   addWorkspace as addWorkspaceService,
   addWorktree as addWorktreeService,
-  connectWorkspace as connectWorkspaceService,
+  ensureRuntimeReady as ensureRuntimeReadyService,
   isWorkspacePathDir as isWorkspacePathDirService,
   listGitBranches,
   listWorkspaces,
@@ -446,7 +446,7 @@ export function useWorkspaces(options: UseWorkspacesOptions = {}) {
       payload: { workspaceId: entry.id, path: entry.path },
     });
     try {
-      await connectWorkspaceService(entry.id);
+      await ensureRuntimeReadyService(entry.id);
     } catch (error) {
       onDebug?.({
         id: `${Date.now()}-client-connect-workspace-error`,

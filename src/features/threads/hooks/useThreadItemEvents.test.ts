@@ -470,6 +470,24 @@ describe("useThreadItemEvents", () => {
     expect(safeMessageActivity).not.toHaveBeenCalled();
   });
 
+  it("skips claude item snapshots for interrupted threads", () => {
+    const { result, dispatch, markProcessing, interruptedThreadsRef, safeMessageActivity } =
+      makeOptions();
+    interruptedThreadsRef.current.add("claude:session-1");
+
+    act(() => {
+      result.current.onItemUpdated("ws-1", "claude:session-1", {
+        type: "agentMessage",
+        id: "assistant-1",
+        text: "late arriving snapshot",
+      });
+    });
+
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(markProcessing).not.toHaveBeenCalled();
+    expect(safeMessageActivity).not.toHaveBeenCalled();
+  });
+
   it("skips gemini completed agent snapshots for interrupted threads", () => {
     const {
       result,
@@ -485,6 +503,30 @@ describe("useThreadItemEvents", () => {
       result.current.onAgentMessageCompleted({
         workspaceId: "ws-1",
         threadId: "gemini:session-1",
+        itemId: "assistant-1",
+        text: "late arriving text",
+      });
+    });
+
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(onAgentMessageCompletedExternal).not.toHaveBeenCalled();
+  });
+
+  it("skips claude completed agent snapshots for interrupted threads", () => {
+    const {
+      result,
+      dispatch,
+      interruptedThreadsRef,
+      onAgentMessageCompletedExternal,
+    } = makeOptions({
+      onAgentMessageCompletedExternal: vi.fn(),
+    });
+    interruptedThreadsRef.current.add("claude:session-1");
+
+    act(() => {
+      result.current.onAgentMessageCompleted({
+        workspaceId: "ws-1",
+        threadId: "claude:session-1",
         itemId: "assistant-1",
         text: "late arriving text",
       });

@@ -2,7 +2,7 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorkspaceInfo } from "../../../types";
-import { listThreads } from "../../../services/tauri";
+import { deleteCodexSessions, listThreads } from "../../../services/tauri";
 import { writeClientStoreData, writeClientStoreValue } from "../../../services/clientStorage";
 import type { useAppServerEvents } from "../../app/hooks/useAppServerEvents";
 import { useThreads } from "./useThreads";
@@ -40,6 +40,7 @@ vi.mock("../../../services/tauri", () => ({
   listThreads: vi.fn(),
   resumeThread: vi.fn(),
   archiveThread: vi.fn(),
+  deleteCodexSessions: vi.fn(),
   deleteOpenCodeSession: vi.fn(),
   getAccountRateLimits: vi.fn(),
   getAccountInfo: vi.fn(),
@@ -141,5 +142,65 @@ describe("useThreads sidebar cache", () => {
         expect.objectContaining({ id: "thread-2" }),
       ]);
     });
+  });
+
+  it("batch deletes codex sessions through the settings fast path", async () => {
+    vi.mocked(listThreads).mockResolvedValue({
+      result: {
+        data: [
+          {
+            id: "thread-1",
+            cwd: workspace.path,
+            preview: "Fresh chat 1",
+            updated_at: 456,
+          },
+          {
+            id: "thread-2",
+            cwd: workspace.path,
+            preview: "Fresh chat 2",
+            updated_at: 455,
+          },
+        ],
+        nextCursor: null,
+      },
+    } as never);
+    vi.mocked(deleteCodexSessions).mockResolvedValue({
+      results: [
+        {
+          sessionId: "thread-1",
+          deleted: true,
+          deletedCount: 1,
+          method: "filesystem",
+        },
+        {
+          sessionId: "thread-2",
+          deleted: true,
+          deletedCount: 1,
+          method: "filesystem",
+        },
+      ],
+    });
+
+    const { result } = renderHook(() =>
+      useThreads({
+        activeWorkspace: workspace,
+        onWorkspaceConnected: vi.fn(),
+      }),
+    );
+
+    await act(async () => {
+      await result.current.listThreadsForWorkspace(workspace);
+    });
+
+    await act(async () => {
+      const deleted = await result.current.removeThreads("ws-1", ["thread-1", "thread-2"]);
+      expect(deleted).toEqual([
+        { threadId: "thread-1", success: true, code: null, message: null },
+        { threadId: "thread-2", success: true, code: null, message: null },
+      ]);
+    });
+
+    expect(deleteCodexSessions).toHaveBeenCalledWith("ws-1", ["thread-1", "thread-2"]);
+    expect(result.current.threadsByWorkspace["ws-1"]).toEqual([]);
   });
 });

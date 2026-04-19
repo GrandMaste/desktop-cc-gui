@@ -6,6 +6,7 @@
 - `connect_workspace_core` 当前会直接 spawn Codex session，并把结果塞进 `sessions` map。
 - app exit 只覆盖了一部分 runtime 清理路径，Codex 与 Claude 的生命周期治理并不一致。
 - Windows 下 `.cmd -> cmd.exe -> node -> sandbox` 的包装链进一步放大了 orphan process 与观测混乱的问题。
+- 启动阶段若 restore / hidden acquire / orphan 残留叠加，会表现为大量 `node` 进程同时出现，但系统当前无法解释这些进程来自 `Codex managed runtime`、`Claude Code child runtime` 还是历史残留。
 
 这导致三个结构性后果：
 
@@ -15,19 +16,37 @@
 
 本设计要把 runtime 从“隐式副作用”拉正为“显式资源”，由统一 Orchestrator 调度，并通过设置页控制台暴露最小但关键的观测与操作面。
 
+## Implementation Alignment
+
+截至 `2026-04-18`，本 change 已经历以下实现收口：
+
+- `cb2db549`: 初次引入 runtime orchestrator、runtime snapshot/mutate command、settings 侧控制台骨架。
+- `d1e17770`: 把 runtime 控制台暴露到可见 settings section，而不是隐藏在已有分组里。
+- `520e7064`: 独立出 `RuntimePoolSection`，补充 summary cards、diagnostics、policy toggles、专属 i18n 与布局收口。
+- `8d617b60`: 重构 orchestrator，引入 startup acquire gate、lease-safe eviction、engine observability，并修复注册前被回收的竞态。
+- `d7b0c022`: 新增 runtime reconnect recovery UI，收紧 runtime budget 输入归一化与 `zombie-suspected` 的前端呈现。
+
+因此本设计文档除了描述目标方案，也必须明确当前 as-built reality：
+
+- `Codex` 已经具备可配置的 budgeted pool。
+- `Claude Code` 已纳入 registry / snapshot / close path / observability，但暂未暴露独立 budget knobs。
+- 用户侧除了 settings console 之外，还新增了消息区 runtime reconnect 恢复入口，用于 runtime 断链后的显式修复。
+
 ## Goals / Non-Goals
 
 **Goals:**
 
 - 建立统一的 runtime registry、state machine、lease source 和 budget 模型。
 - 让 `connect / ensure / restore / exit / orphan sweep` 共享同一套生命周期语义。
-- 将默认 `Codex` 行为从 per-workspace 常驻改为 budgeted pool。
+- 将默认 `Codex` 行为从 per-workspace 常驻改为 budgeted pool，并让 `Claude Code` 共享统一 lifecycle / lease / shutdown / observability contract。
 - 提供 `Runtime Pool Console` 作为用户可见的观测与干预入口。
 - 三阶段推进，确保可以先止血再演进，不要求一次性大爆改。
+- 明确 `reconcile_pool` 与 `runtime termination` 的职责边界，避免时间驱动回收直接打断 in-flight turn。
+- 把“启动 node 进程风暴”变成可归因问题：每个启动期进程都必须能映射到 `managed runtime / child resume / orphan residue` 之一。
 
 **Non-Goals:**
 
-- 不把所有 engine 在首期就改成完全一致的执行内部实现。
+- 不把所有 engine 在首期就改成完全一致的执行内部实现；`Codex` 与 `Claude Code` 共享同一套 lifecycle/lease/shutdown contract，但 budget 配置仍允许分阶段推进。
 - 不改 thread / conversation 数据模型本身。
 - 不实现一个系统级多进程管理器或替代 OS task manager。
 - 不支持同 workspace 的同 engine 多实例并行常驻。
@@ -62,9 +81,10 @@
 
 - `Absent`
 - `Starting`
-- `Ready`
-- `Busy`
-- `CoolingDown`
+- `Acquired`
+- `Streaming`
+- `GracefulIdle`
+- `Evictable`
 - `Stopping`
 - `Failed`
 - `ZombieSuspected`
@@ -83,13 +103,14 @@
 原因：
 
 - 这是消除“新 session 覆盖旧 handle，旧进程却没死”的唯一可靠方式。
+- 这是消除“streaming 过程中被时间回收误杀”的必要前提。
 
 备选方案：
 
 - 只在 `connect` 前做一次 `contains_key` 判断
   - 缺点：覆盖不了 race、partial restart、reload、stale handle 替换场景
 
-### Decision 3: `Codex` 首期采用 `Hot / Warm / Cold / Pinned` 池化模型
+### Decision 3: `Codex` 首期采用 `Hot / Warm / Cold / Pinned` 池化模型，`Claude Code` 同步接入统一 registry / lease / close path
 
 定义：
 
@@ -105,17 +126,31 @@
 默认预算：
 
 - `max_hot_codex = 1`
-- `max_warm_codex = 1`
-- `warm_ttl_seconds = 90`
+- `max_warm_codex = 2`
+- `warm_ttl_seconds = 120`
+
+当前实现边界：
+
+- settings 与 snapshot budget 字段当前只暴露 `Codex` 的 `max_hot / max_warm / warm_ttl`
+- `Claude Code` 已出现在 runtime rows / summary / engine observability 中
+- `mutate_runtime_pool` 可对 `Claude Code` 执行 `close` / `pin`
+- `release-to-cold` 对 `Claude Code` 当前等价于 close，而不是独立 warm/cold budget 调度
 
 驱逐原则：
 
-- 预算超限时，先驱逐 `Warm` 中最久未使用且无 active turn 的 runtime
+- 预算超限时，先驱逐 `Warm` 中最久未使用且无 active lease 的 runtime
 - `Pinned` 不参与普通驱逐，但仍受全局硬上限保护
+
+回收门禁：
+
+- 只有 `Evictable` runtime 才允许进入回收流水线
+- 只有当 `turnLease + streamLease == 0` 时，runtime 才能被标记为 `Evictable`
+- `reconcile_pool` 只产出回收候选，不直接执行 kill
+- kill 行为统一由 `RuntimeLifecycleCoordinator` 以 `graceful drain -> timeout -> hard kill` 流程执行
 
 原因：
 
-- 这能把 runtime 数从“随 workspace 数量增长”切换为“随当前活跃度增长”。
+- 这能先把最严重的 `Codex` runtime 数问题从“随 workspace 数量增长”切换为“随当前活跃度增长”，同时避免 `Claude Code` 继续游离在统一治理面之外。
 
 备选方案：
 
@@ -175,7 +210,7 @@
 
 备选方案：
 
-- 仅在 exit path 补 Codex kill
+- 仅在 exit path 补单一 engine kill
   - 缺点：无法处理异常退出与历史残留
 
 ### Decision 6: Windows 上统一 process-tree termination primitive
@@ -195,6 +230,7 @@
 原因：
 
 - 用户看到的是 `cmd/node/sandbox` 链，不是抽象 session；清理必须对准进程树。
+- 启动时看到的大量 `node` 进程，本质上也是这条包装链的外显症状；如果没有统一树级归因与清理，用户无法区分“正常 runtime”与“异常残留”。
 
 ### Decision 7: 新增 `Runtime Pool Console`，作为 Orchestrator 的可观测与干预面
 
@@ -222,6 +258,13 @@
   - `退出时强制清理 runtime`
   - `启动时 orphan sweep`
 
+当前可见性约束：
+
+- 控制台必须出现在可见的 `Settings > Runtime` section
+- 不能再藏在 `CodexSection` 或 `OtherSection` 的二级区域里
+- engine summary 可以同时显示 `Codex` 与 `Claude`
+- budget 调参文案必须明确是 `Codex-only`
+
 交互约束：
 
 - 手动“增加”仅指增加预算或 pin，不允许创建同 workspace 多实例
@@ -231,6 +274,36 @@
 原因：
 
 - 没有控制台，Orchestrator 只解决了系统问题，没有解决“用户与 QA 无法理解当前状态”的问题。
+
+### Decision 8: 回收器与终止器权限分离（Reconciler vs Coordinator）
+
+定义：
+
+- `Reconciler`：预算计算、TTL 判定、候选标记（纯决策）
+- `Coordinator`：状态迁移、lease 校验、终止执行（有副作用）
+
+约束：
+
+- `Reconciler` 禁止直接触发 `stop_workspace_session` 或等效 kill 动作
+- `Coordinator` 在执行终止前必须再次校验 lease（避免竞态）
+- 任意终止失败必须写入 diagnostics，并可在 console 观察
+
+原因：
+
+- 当前事故的根因之一是“定时回收同时持有决策和执行权限”，导致错误状态下可直接杀进程。
+
+### Decision 9: runtime 断链必须有用户可见恢复面，而不是只依赖后台日志
+
+新增消息区恢复卡片：
+
+- 当错误消息命中 `broken pipe`、`the pipe is being closed`、`workspace not connected` 等模式时
+- 前端在消息区展示 `RuntimeReconnectCard`
+- 用户可直接调用 `ensureRuntimeReady(workspaceId)` 重建 runtime
+
+原因：
+
+- runtime 断链属于这个 change 的自然延伸问题；如果 Orchestrator 解决了后台资源治理，却没有给用户显式恢复面，用户仍然会感知为“对话突然坏了但不知道怎么办”。
+- `d7b0c022` 已经证明这类错误在 UI 层需要单独收口，否则会退化为原始错误文本直接外露。
 
 ## Risks / Trade-offs
 
@@ -267,12 +340,12 @@
 
 ### 判断 2: 不能一开始就全面推广到所有 engine
 
-这次 P0 根因来自 `Codex` persistent runtime。`Claude/Gemini/OpenCode` 当前虽有生命周期问题，但不与“workspace 数量 -> 常驻 runtime 数量”同强度绑定。
+这次 P0 根因首先在 `Codex` 路径暴露，但 `Claude Code` 使用同类 persistent runtime 模式，风险模型一致；两者必须同时进入统一 contract。`Gemini/OpenCode` 当前虽有生命周期问题，但不与“workspace 数量 -> 常驻 runtime 数量”同强度绑定。
 
 因此首刀应该：
 
 - Phase 1 用统一 shutdown / ledger / diagnostics 收口所有受管 runtime
-- Phase 2 的池化与 lazy acquire 先聚焦 `Codex`
+- Phase 2 先把 budgeted pool、lease gate 与 lazy acquire 在 `Codex` 上做实，再让 `Claude Code` 跟进统一 lease / snapshot / close path
 - 其他 engine 后续只复用 orchestrator 骨架，不阻塞本次止血
 
 ### 判断 3: 先修 backend 真值，再改 frontend restore
@@ -322,11 +395,13 @@
 - replace-old-session cleanup
 - launch-time orphan sweep
 - diagnostics / metrics
+- startup node-process attribution
 
 成功标准：
 
 - 重复 connect 不再新增孤儿进程
 - 退出后残留显著下降
+- 启动时出现的 `node` 进程可被解释为：当前受管 runtime、Claude resume child、或 orphan cleanup 目标
 
 ### Wave C: 行为切换层
 
@@ -353,22 +428,25 @@
 
 ## Migration Plan
 
-### Phase 1: 止血与收口
+### Phase 1: 生命周期真值收口
 
 - 建 runtime registry、ledger、shutdown coordinator
+- 建立 turn/stream lease 数据结构与状态迁移入口
 - 修复 local `connect_workspace` 幂等与 replace-old-session cleanup
-- 扩展 exit cleanup 覆盖 Codex managed runtimes
+- 扩展 exit cleanup 覆盖 `Codex` 与 `Claude Code` managed runtimes
 - 上线 orphan sweep 与基础 diagnostics
 
 回滚：
 
 - 可回退到旧 connect / exit path，但保留 runtime ledger 不影响行为
 
-### Phase 2: 去 workspace 常驻化
+### Phase 2: 池化回收重构与恢复解耦
 
 - `useWorkspaceRestore` 改成只恢复 UI/thread metadata
-- 引入 `ensureRuntimeReady` lazy acquire
+- 引入 `ensureRuntimeReady` / 对等 `Claude` acquire lazy contract
 - 上线 `Hot/Warm/Cold` 与 warm TTL
+- 将 `reconcile_pool` 改为候选标记器，回收执行切换到 `RuntimeLifecycleCoordinator`
+- 建立 in-flight 场景下的 lease gate（禁止回收）
 
 回滚：
 
@@ -387,7 +465,7 @@
 
 ## Open Questions
 
-- `Claude/Gemini/OpenCode` 在 Phase 2 是否只共享 shutdown/ledger，还是也进入统一 budget pool？
+- `Gemini/OpenCode` 在后续阶段是仅共享 shutdown/ledger，还是也进入统一 budget pool？
 - `Pinned` 是否需要独立的全局硬上限，防止用户把所有 workspace 都 pin 住？
 - Pool Console 是否放在 Settings 的一级 tab，还是现有 runtime/settings 相关区域下的二级面板？
 - runtime snapshot 是否需要在 status panel 中暴露最小摘要，还是先只放 settings console？

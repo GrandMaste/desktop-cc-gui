@@ -2,6 +2,50 @@
 
 ---
 
+##### **2026年4月18日（v0.4.3）**
+
+中文：
+
+✨ Features
+- 新增 Runtime Pool Console 与独立设置面板，可集中查看 Codex runtime 池状态、进程观测信息与预算配置，提升运行时诊断与调优能力
+- 重构回溯模式与文件选择策略：将回溯确认改为三种模式单选（回退消息+相关文件、只回退消息、只回退文件），并仅纳入当前用户回合后的真实 mutation 文件
+- 为消息区新增 runtime 恢复卡片，支持断链诊断、一键重连，以及恢复后直接重发上一条用户提示词
+
+🔧 Improvements
+- 增强 Claude plan mode 到执行态的切换体验：保留首张 handoff 卡、记录按钮状态、支持复制计划 markdown，并优化模式切换后的可感知反馈
+- 强化 Claude 默认模式审批桥接与审批卡展示：补齐路径摘要提取、默认隐藏 content/patch/diff 正文，并降低审批噪音
+- 优化 runtime 预算面板与恢复提示文案，补齐 Codex-only 预算边界、异常输入归一化和跨平台提示一致性
+- 提升工作区恢复、会话继续与项目会话批量删除后的刷新收敛速度，减少长链路操作中的等待与状态漂移
+
+🐛 Fixes
+- 修复 runtime orchestrator 启动与注册期间的进程回收竞态，避免会话创建、恢复或连接过程中被误判并提前回收
+- 修复会话继续时旧 `threadId` 失效后的恢复失败，并补齐 `thread not found`、`SESSION_NOT_FOUND` 与 stale session 等场景的自动恢复链路
+- 修复运行时断连后的重连卡片误判、重发来源错误、重复用户气泡与无效成功提示等问题
+- 修复项目会话批量删除后设置页可能长期停留在“正在加载会话”状态的问题
+- 修复 Claude 计划模式切换、默认模式审批衔接、迟到线程事件污染与 explore 卡片隐藏边界问题
+
+English:
+
+✨ Features
+- Add a Runtime Pool Console and dedicated settings panel to inspect Codex runtime-pool state, process observability, and budget settings for easier diagnosis and tuning
+- Refactor rewind mode and file selection strategy into three explicit options (rollback message+related files, message-only, files-only), while limiting file rollback targets to real mutations from the current user turn
+- Add a dedicated runtime recovery card in the message area with disconnect diagnosis, one-click reconnect, and resend-last-prompt support after recovery
+
+🔧 Improvements
+- Improve the Claude plan-to-execution experience by preserving the first handoff card, keeping button state, supporting plan-markdown copy, and adding clearer post-switch feedback
+- Harden the Claude default-mode approval bridge and approval-card presentation with better path summaries and hidden content/patch/diff bodies to reduce noise
+- Refine runtime budget controls and recovery messaging with tighter Codex-only boundaries, invalid-input normalization, and more consistent cross-platform prompts
+- Improve refresh convergence after workspace restore, conversation resume, and bulk session deletion to reduce waiting time and state drift in long-running flows
+
+🐛 Fixes
+- Fix runtime-orchestrator startup and registration races that could misclassify active processes and recycle them too early during session creation, recovery, or connection
+- Fix failed conversation resume when an old `threadId` becomes invalid, and complete automatic recovery for cases such as `thread not found`, `SESSION_NOT_FOUND`, and stale sessions
+- Fix reconnect-card false positives, incorrect resend-source selection, duplicated user bubbles, and ineffective success notices after runtime disconnects
+- Fix the Settings page getting stuck on “loading sessions” after bulk-deleting project sessions
+- Fix Claude plan-mode switching, default-mode approval handoff, late thread-event pollution, and explore-card visibility edge cases
+
+---
+
 ##### **2026年4月16日（v0.4.2）**
 
 中文：

@@ -205,6 +205,15 @@ type LayoutNodesOptions = {
     request: RequestUserInputRequest,
     response: RequestUserInputResponse,
   ) => Promise<void> | void;
+  onRecoverThreadRuntime?: (
+    workspaceId: string,
+    threadId: string,
+  ) => Promise<string | null | void> | string | null | void;
+  onRecoverThreadRuntimeAndResend?: (
+    workspaceId: string,
+    threadId: string,
+    message: Pick<QueuedMessage, "text" | "images">,
+  ) => Promise<string | null | void> | string | null | void;
   handleExitPlanModeExecute?: (
     mode: Extract<AccessMode, "default" | "full-access">,
   ) => Promise<void> | void;
@@ -1149,6 +1158,8 @@ export function useLayoutNodes(options: LayoutNodesOptions): LayoutNodesResult {
       approvals={options.approvals}
       workspaces={options.workspaces}
       onUserInputSubmit={options.handleUserInputSubmit}
+      onRecoverThreadRuntime={options.onRecoverThreadRuntime}
+      onRecoverThreadRuntimeAndResend={options.onRecoverThreadRuntimeAndResend}
       onApprovalDecision={options.handleApprovalDecision}
       onApprovalBatchAccept={options.handleApprovalBatchAccept}
       onApprovalRemember={options.handleApprovalRemember}
@@ -1186,6 +1197,8 @@ export function useLayoutNodes(options: LayoutNodesOptions): LayoutNodesResult {
     options.approvals,
     options.workspaces,
     options.handleUserInputSubmit,
+    options.onRecoverThreadRuntime,
+    options.onRecoverThreadRuntimeAndResend,
     options.handleApprovalDecision,
     options.handleApprovalBatchAccept,
     options.handleApprovalRemember,

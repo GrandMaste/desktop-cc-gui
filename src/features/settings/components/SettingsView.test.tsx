@@ -120,6 +120,12 @@ const baseSettings: AppSettings = {
   notificationSoundId: "default",
   notificationSoundCustomPath: "",
   systemNotificationEnabled: true,
+  runtimeRestoreThreadsOnlyOnLaunch: true,
+  runtimeForceCleanupOnExit: true,
+  runtimeOrphanSweepOnLaunch: true,
+  codexMaxHotRuntimes: 1,
+  codexMaxWarmRuntimes: 1,
+  codexWarmTtlSeconds: 90,
   preloadGitDiffs: true,
   experimentalCollabEnabled: false,
   experimentalCollaborationModesEnabled: false,
@@ -1120,6 +1126,86 @@ describe("SettingsView Other", () => {
       expect(screen.getByText("Session B")).toBeTruthy();
     });
     expect(screen.queryByText("Session A")).toBeNull();
+  });
+
+  it("refreshes project sessions on other section entry and workspace switch", async () => {
+    const workspaceOne: WorkspaceInfo = {
+      id: "ws-1",
+      name: "Workspace One",
+      path: "/tmp/workspace-one",
+      connected: false,
+      codex_bin: null,
+      kind: "main",
+      parentId: null,
+      worktree: null,
+      settings: { sidebarCollapsed: false, codexArgs: null },
+    };
+    const workspaceTwo: WorkspaceInfo = {
+      id: "ws-2",
+      name: "Workspace Two",
+      path: "/tmp/workspace-two",
+      connected: false,
+      codex_bin: null,
+      kind: "main",
+      parentId: null,
+      worktree: null,
+      settings: { sidebarCollapsed: false, codexArgs: null },
+    };
+    const onEnsureWorkspaceThreads = vi.fn();
+
+    render(
+      <SettingsView
+        workspaceGroups={[]}
+        groupedWorkspaces={[
+          { id: "group-1", name: "Github", workspaces: [workspaceOne, workspaceTwo] },
+        ]}
+        ungroupedLabel="Ungrouped"
+        onClose={vi.fn()}
+        onMoveWorkspace={vi.fn()}
+        onDeleteWorkspace={vi.fn()}
+        onCreateWorkspaceGroup={vi.fn().mockResolvedValue(null)}
+        onRenameWorkspaceGroup={vi.fn().mockResolvedValue(null)}
+        onMoveWorkspaceGroup={vi.fn().mockResolvedValue(null)}
+        onDeleteWorkspaceGroup={vi.fn().mockResolvedValue(null)}
+        onAssignWorkspaceGroup={vi.fn().mockResolvedValue(null)}
+        reduceTransparency={false}
+        onToggleTransparency={vi.fn()}
+        appSettings={baseSettings}
+        openAppIconById={{}}
+        onUpdateAppSettings={vi.fn().mockResolvedValue(undefined)}
+        onRunDoctor={vi.fn().mockResolvedValue(createDoctorResult())}
+        activeWorkspace={workspaceOne}
+        activeEngine="codex"
+        onUpdateWorkspaceCodexBin={vi.fn().mockResolvedValue(undefined)}
+        onUpdateWorkspaceSettings={vi.fn().mockResolvedValue(undefined)}
+        workspaceThreadsById={{
+          "ws-1": [],
+          "ws-2": [],
+        }}
+        onEnsureWorkspaceThreads={onEnsureWorkspaceThreads}
+        scaleShortcutTitle="Scale shortcut"
+        scaleShortcutText="Use Command +/-"
+        onTestNotificationSound={vi.fn()}
+        dictationModelStatus={null}
+        onDownloadDictationModel={vi.fn()}
+        onCancelDictationDownload={vi.fn()}
+        onRemoveDictationModel={vi.fn()}
+        initialSection="other"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(onEnsureWorkspaceThreads).toHaveBeenCalledWith("ws-1");
+    });
+
+    onEnsureWorkspaceThreads.mockClear();
+
+    fireEvent.click(screen.getByTestId("settings-project-sessions-workspace-picker-trigger"));
+    fireEvent.click(screen.getByRole("option", { name: "Workspace Two" }));
+
+    await waitFor(() => {
+      expect(onEnsureWorkspaceThreads).toHaveBeenCalledWith("ws-2");
+    });
   });
 
   it("shows and selects worktree entries in project session picker", async () => {

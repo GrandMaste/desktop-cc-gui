@@ -1,0 +1,667 @@
+import type { ConversationItem, ThreadSummary } from "../../../types";
+import { previewThreadName } from "../../../utils/threadItems";
+import { asNumber, asString } from "../utils/threadNormalize";
+import { matchesWorkspacePath } from "./useThreadActions.workspacePath";
+
+const CLAUDE_HISTORY_MESSAGE_ID_REGEX =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+const CODEX_BACKGROUND_HELPER_PROMPT_PREFIXES = [
+  "Generate a concise title for a coding chat thread from the first user message.",
+  "You create concise run metadata for a coding task.",
+  "You are generating OpenSpec project context.",
+  "请生成一次提交（commit）信息，提交信息需遵循 Conventional Commits 规范，并且全部使用中文。",
+  "Please generate a commit message. The commit message must follow the Conventional Commits specification and be written entirely in English.",
+  "Generate a concise git commit message for the following changes.",
+] as const;
+
+type MessageConversationItem = Extract<ConversationItem, { kind: "message" }>;
+type UserConversationMessage = MessageConversationItem & { role: "user" };
+type RewindSupportedEngine = "claude" | "codex";
+
+export type GeminiSessionSummary = {
+  sessionId: string;
+  firstMessage: string;
+  updatedAt: number;
+  fileSizeBytes?: number;
+};
+
+export function isWorkspaceNotConnectedError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.toLowerCase().includes("workspace not connected");
+}
+
+function normalizeThreadResumeErrorMessage(error: unknown): string {
+  return (error instanceof Error ? error.message : String(error)).trim().toLowerCase();
+}
+
+export function isThreadResumeNotFoundError(error: unknown): boolean {
+  const message = normalizeThreadResumeErrorMessage(error);
+  return (
+    message.includes("thread not found") ||
+    message.includes("[session_not_found]") ||
+    message.includes("session not found") ||
+    message.includes("session file not found")
+  );
+}
+
+export function inferThreadEngineSource(
+  threadId: string,
+  summary?: ThreadSummary,
+): ThreadSummary["engineSource"] {
+  if (summary?.engineSource) {
+    return summary.engineSource;
+  }
+  const normalized = threadId.trim().toLowerCase();
+  if (normalized.startsWith("claude:") || normalized.startsWith("claude-pending-")) {
+    return "claude";
+  }
+  if (normalized.startsWith("gemini:") || normalized.startsWith("gemini-pending-")) {
+    return "gemini";
+  }
+  if (normalized.startsWith("opencode:") || normalized.startsWith("opencode-pending-")) {
+    return "opencode";
+  }
+  return "codex";
+}
+
+function isPendingThreadId(threadId: string): boolean {
+  const normalized = threadId.trim().toLowerCase();
+  return (
+    normalized.startsWith("claude-pending-") ||
+    normalized.startsWith("gemini-pending-") ||
+    normalized.startsWith("opencode-pending-") ||
+    normalized.startsWith("codex-pending-")
+  );
+}
+
+export function selectReplacementThreadSummary(params: {
+  staleThreadId: string;
+  summaries: ThreadSummary[];
+  staleSummary?: ThreadSummary;
+}): ThreadSummary | null {
+  const { staleThreadId, summaries } = params;
+  const staleSummary =
+    params.staleSummary ?? summaries.find((entry) => entry.id === staleThreadId);
+  const staleEngine = inferThreadEngineSource(staleThreadId, staleSummary);
+  const staleName = staleSummary?.name?.trim() ?? "";
+  const candidates = summaries.filter((entry) => {
+    if (!entry.id || entry.id === staleThreadId) {
+      return false;
+    }
+    if (entry.threadKind === "shared" || isPendingThreadId(entry.id)) {
+      return false;
+    }
+    return inferThreadEngineSource(entry.id, entry) === staleEngine;
+  });
+  if (candidates.length === 0) {
+    return null;
+  }
+  const scored = candidates
+    .map((entry) => {
+      let score = 0;
+      if (staleName && entry.name.trim() === staleName) {
+        score += 100;
+      }
+      if (staleSummary?.source && entry.source && staleSummary.source === entry.source) {
+        score += 20;
+      }
+      if (
+        staleSummary?.provider &&
+        entry.provider &&
+        staleSummary.provider === entry.provider
+      ) {
+        score += 20;
+      }
+      if (
+        staleSummary?.sourceLabel &&
+        entry.sourceLabel &&
+        staleSummary.sourceLabel === entry.sourceLabel
+      ) {
+        score += 20;
+      }
+      return { entry, score };
+    })
+    .sort((left, right) => {
+      if (right.score !== left.score) {
+        return right.score - left.score;
+      }
+      return right.entry.updatedAt - left.entry.updatedAt;
+    });
+  const best = scored[0];
+  const next = scored[1];
+  if (!best) {
+    return null;
+  }
+  if (best.score > 0 && (!next || next.score < best.score)) {
+    return best.entry;
+  }
+  if (candidates.length === 1) {
+    return candidates[0] ?? null;
+  }
+  return null;
+}
+
+export function mergeRecoveredThreadSummaries(
+  existingSummaries: ThreadSummary[],
+  refreshedSummaries: ThreadSummary[],
+  engineSource: ThreadSummary["engineSource"],
+): ThreadSummary[] {
+  const mergedById = new Map<string, ThreadSummary>();
+  existingSummaries.forEach((entry) => {
+    if (inferThreadEngineSource(entry.id, entry) !== engineSource) {
+      mergedById.set(entry.id, entry);
+    }
+  });
+  refreshedSummaries.forEach((entry) => {
+    const previous = mergedById.get(entry.id);
+    if (!previous || entry.updatedAt >= previous.updatedAt) {
+      mergedById.set(entry.id, entry);
+    }
+  });
+  return Array.from(mergedById.values()).sort((left, right) => right.updatedAt - left.updatedAt);
+}
+
+export function isUserConversationMessage(
+  item: ConversationItem | undefined,
+): item is UserConversationMessage {
+  return item?.kind === "message" && item.role === "user";
+}
+
+export function normalizeComparableRewindText(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
+
+export function findLastUserMessageIndexById(
+  items: UserConversationMessage[],
+  messageId: string,
+): number {
+  const normalizedMessageId = messageId.trim();
+  if (!normalizedMessageId) {
+    return -1;
+  }
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index];
+    if (!item) {
+      continue;
+    }
+    if (item.id.trim() === normalizedMessageId) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+export function resolveClaudeRewindMessageIdFromHistory(params: {
+  requestedMessageId: string;
+  threadItems: ConversationItem[];
+  historyItems: ConversationItem[];
+}): string {
+  const requestedMessageId = params.requestedMessageId.trim();
+  if (!requestedMessageId) {
+    return "";
+  }
+  if (CLAUDE_HISTORY_MESSAGE_ID_REGEX.test(requestedMessageId)) {
+    return requestedMessageId;
+  }
+
+  const localUserItems = params.threadItems.filter(isUserConversationMessage);
+  const targetLocalIndex = localUserItems.findIndex(
+    (item) => item.id.trim() === requestedMessageId,
+  );
+  if (targetLocalIndex < 0) {
+    return requestedMessageId;
+  }
+  const targetLocalItem = localUserItems[targetLocalIndex];
+  if (!targetLocalItem) {
+    return requestedMessageId;
+  }
+
+  const historyUserItems = params.historyItems
+    .filter(isUserConversationMessage)
+    .map((item) => ({
+      id: item.id.trim(),
+      text: normalizeComparableRewindText(item.text),
+    }))
+    .filter((item) => item.id.length > 0);
+  if (historyUserItems.length < 1) {
+    return requestedMessageId;
+  }
+  if (historyUserItems.some((item) => item.id === requestedMessageId)) {
+    return requestedMessageId;
+  }
+
+  const targetText = normalizeComparableRewindText(targetLocalItem.text);
+  if (targetText) {
+    const targetOccurrenceByText =
+      localUserItems.reduce((count, item, index) => {
+        if (index > targetLocalIndex) {
+          return count;
+        }
+        return normalizeComparableRewindText(item.text) === targetText
+          ? count + 1
+          : count;
+      }, 0) || 1;
+    const historyMatches = historyUserItems.filter(
+      (item) => item.text === targetText,
+    );
+    if (historyMatches.length >= targetOccurrenceByText) {
+      return historyMatches[targetOccurrenceByText - 1]?.id ?? requestedMessageId;
+    }
+    if (historyMatches.length > 0) {
+      return historyMatches[historyMatches.length - 1]?.id ?? requestedMessageId;
+    }
+  }
+
+  const positionFromLatest = localUserItems.length - 1 - targetLocalIndex;
+  const fallbackIndex = historyUserItems.length - 1 - positionFromLatest;
+  if (fallbackIndex >= 0 && fallbackIndex < historyUserItems.length) {
+    return historyUserItems[fallbackIndex]?.id ?? requestedMessageId;
+  }
+  return historyUserItems[historyUserItems.length - 1]?.id ?? requestedMessageId;
+}
+
+export function findLatestHistoryUserMessageId(items: ConversationItem[]): string {
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index];
+    if (!isUserConversationMessage(item)) {
+      continue;
+    }
+    const id = item.id.trim();
+    if (!id) {
+      continue;
+    }
+    return id;
+  }
+  return "";
+}
+
+export function findFirstHistoryUserMessageId(items: ConversationItem[]): string {
+  for (let index = 0; index < items.length; index += 1) {
+    const item = items[index];
+    if (!isUserConversationMessage(item)) {
+      continue;
+    }
+    const id = item.id.trim();
+    if (!id) {
+      continue;
+    }
+    return id;
+  }
+  return "";
+}
+
+function normalizeThreadSizeBytes(value: unknown) {
+  const sizeBytes = asNumber(value);
+  return sizeBytes > 0 ? Math.round(sizeBytes) : undefined;
+}
+
+export function extractThreadSizeBytes(record: Record<string, unknown>) {
+  return normalizeThreadSizeBytes(
+    record.sizeBytes ??
+      record.size_bytes ??
+      record.fileSizeBytes ??
+      record.file_size_bytes ??
+      record.byteSize ??
+      record.byte_size ??
+      record.bytes,
+  );
+}
+
+function normalizeGeminiSessionSummary(value: unknown): GeminiSessionSummary | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  const sessionId = asString(record.sessionId ?? record.session_id).trim();
+  if (!sessionId) {
+    return null;
+  }
+  const fileSizeBytes = extractThreadSizeBytes(record);
+  return {
+    sessionId,
+    firstMessage: asString(record.firstMessage ?? record.first_message).trim(),
+    updatedAt: asNumber(record.updatedAt ?? record.updated_at),
+    ...(fileSizeBytes !== undefined ? { fileSizeBytes } : {}),
+  };
+}
+
+export function normalizeGeminiSessionSummaries(value: unknown): GeminiSessionSummary[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const summaries: GeminiSessionSummary[] = [];
+  value.forEach((entry) => {
+    const summary = normalizeGeminiSessionSummary(entry);
+    if (summary) {
+      summaries.push(summary);
+    }
+  });
+  return summaries;
+}
+
+export function mergeGeminiSessionSummaries(
+  baseSummaries: ThreadSummary[],
+  geminiSessions: GeminiSessionSummary[],
+  workspaceId: string,
+  mappedTitles: Record<string, string>,
+  getCustomName: (workspaceId: string, threadId: string) => string | undefined,
+): ThreadSummary[] {
+  if (geminiSessions.length === 0) {
+    return baseSummaries;
+  }
+  const mergedById = new Map<string, ThreadSummary>();
+  baseSummaries.forEach((entry) => mergedById.set(entry.id, entry));
+  geminiSessions.forEach((session) => {
+    const id = `gemini:${session.sessionId}`;
+    const prev = mergedById.get(id);
+    const updatedAt = Number.isFinite(session.updatedAt)
+      ? Math.max(0, session.updatedAt)
+      : 0;
+    const next: ThreadSummary = {
+      id,
+      name:
+        mappedTitles[id] ||
+        getCustomName(workspaceId, id) ||
+        previewThreadName(session.firstMessage, "Gemini Session"),
+      updatedAt,
+      sizeBytes: session.fileSizeBytes,
+      engineSource: "gemini",
+    };
+    if (!prev || next.updatedAt >= prev.updatedAt) {
+      mergedById.set(id, next);
+    }
+  });
+  return Array.from(mergedById.values()).sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
+export async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T | null> {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
+
+export async function mapWithConcurrency<T>(
+  items: string[],
+  concurrency: number,
+  worker: (item: string) => Promise<T>,
+): Promise<T[]> {
+  if (items.length === 0) {
+    return [];
+  }
+  const normalizedConcurrency = Math.max(1, Math.floor(concurrency));
+  const results: T[] = [];
+  let cursor = 0;
+  const runWorker = async () => {
+    while (cursor < items.length) {
+      const currentIndex = cursor;
+      cursor += 1;
+      const item = items[currentIndex];
+      if (!item) {
+        continue;
+      }
+      const result = await worker(item);
+      results.push(result);
+    }
+  };
+  const workers = Array.from(
+    { length: Math.min(normalizedConcurrency, items.length) },
+    () => runWorker(),
+  );
+  await Promise.all(workers);
+  return results;
+}
+
+export function resolveRewindSupportedEngine(
+  threadId: string,
+): RewindSupportedEngine | null {
+  const normalized = threadId.trim().toLowerCase();
+  if (!normalized) {
+    return null;
+  }
+  if (normalized.startsWith("claude:")) {
+    return "claude";
+  }
+  if (normalized.startsWith("codex:")) {
+    return "codex";
+  }
+  if (
+    normalized.startsWith("claude-pending-") ||
+    normalized.startsWith("codex-pending-") ||
+    normalized.startsWith("gemini:") ||
+    normalized.startsWith("gemini-pending-") ||
+    normalized.startsWith("opencode:") ||
+    normalized.startsWith("opencode-pending-")
+  ) {
+    return null;
+  }
+  if (normalized.includes(":")) {
+    return null;
+  }
+  return "codex";
+}
+
+export function isLocalSessionScanUnavailable(result: Record<string, unknown>): boolean {
+  const marker = asString(result.partialSource ?? result.partial_source)
+    .trim()
+    .toLowerCase();
+  return marker === "local-session-scan-unavailable";
+}
+
+export function shouldIncludeWorkspaceThreadEntry(
+  thread: Record<string, unknown>,
+  workspacePath: string,
+  knownCodexThreadIds: Set<string>,
+  allowKnownCodexWithoutCwd: boolean,
+): boolean {
+  const threadCwd = asString(thread.cwd).trim();
+  if (matchesWorkspacePath(threadCwd, workspacePath)) {
+    return shouldIncludeThreadEntry(thread);
+  }
+  if (!allowKnownCodexWithoutCwd || threadCwd.length > 0) {
+    return false;
+  }
+  const threadId = asString(thread.id).trim();
+  if (!threadId || !knownCodexThreadIds.has(threadId)) {
+    return false;
+  }
+  return shouldIncludeThreadEntry(thread);
+}
+
+function toBooleanFlag(value: unknown): boolean {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "number") {
+    return value !== 0;
+  }
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    return normalized === "1" || normalized === "true" || normalized === "yes";
+  }
+  return false;
+}
+
+function isArchivedThread(thread: Record<string, unknown>): boolean {
+  const archivedFlag = toBooleanFlag(thread.archived ?? thread.isArchived);
+  if (archivedFlag) {
+    return true;
+  }
+  return asNumber(thread.archivedAt ?? thread.archived_at) > 0;
+}
+
+function normalizeThreadMetaValue(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+export function resolveThreadSourceMeta(thread: Record<string, unknown>): Pick<
+  ThreadSummary,
+  "source" | "provider" | "sourceLabel"
+> {
+  const source =
+    normalizeThreadMetaValue(thread.source) ??
+    normalizeThreadMetaValue(thread.sessionSource);
+  const provider =
+    normalizeThreadMetaValue(thread.provider) ??
+    normalizeThreadMetaValue(thread.providerId) ??
+    normalizeThreadMetaValue(thread.sessionProvider);
+  const sourceLabel =
+    normalizeThreadMetaValue(thread.sourceLabel) ??
+    (source && provider ? `${source}/${provider}` : source ?? provider);
+  return {
+    source,
+    provider,
+    sourceLabel,
+  };
+}
+
+function shouldIncludeThreadEntry(thread: Record<string, unknown>): boolean {
+  if (isArchivedThread(thread)) {
+    return false;
+  }
+  const previewCandidates = [
+    asString(thread.preview).trim(),
+    asString(thread.title).trim(),
+    asString(thread.name).trim(),
+  ].filter(Boolean);
+  const isCodexHelperThread = previewCandidates.some((preview) =>
+    CODEX_BACKGROUND_HELPER_PROMPT_PREFIXES.some((prefix) =>
+      preview.startsWith(prefix),
+    ),
+  );
+  if (isCodexHelperThread) {
+    return false;
+  }
+  return true;
+}
+
+function parseCollabLinkDetail(detail: string, fallbackParentId: string) {
+  const trimmed = detail.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const hasUnicodeArrow = trimmed.includes("→");
+  const hasAsciiArrow = !hasUnicodeArrow && trimmed.includes("->");
+  if (!hasUnicodeArrow && !hasAsciiArrow) {
+    return null;
+  }
+  const [leftSideRaw, rightSideRaw] = hasUnicodeArrow
+    ? trimmed.split("→", 2)
+    : trimmed.split("->", 2);
+  const leftSide = (leftSideRaw ?? "").trim();
+  const rightSide = (rightSideRaw ?? "").trim();
+  const parentMatch = leftSide.match(/^From\s+(.+)$/i);
+  const parentId = (parentMatch?.[1]?.trim() || fallbackParentId).trim();
+  const childIds = rightSide
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  if (!parentId || childIds.length === 0) {
+    return null;
+  }
+  return { parentId, childIds };
+}
+
+export function restoreThreadParentLinksFromSnapshot(
+  threadId: string,
+  items: ConversationItem[],
+  updateThreadParent?: (parentId: string, childIds: string[]) => void,
+) {
+  if (!updateThreadParent) {
+    return;
+  }
+  items.forEach((item) => {
+    if (item.kind !== "tool" || item.toolType !== "collabToolCall") {
+      return;
+    }
+    const parsedLink = parseCollabLinkDetail(item.detail, threadId);
+    if (!parsedLink) {
+      return;
+    }
+    updateThreadParent(parsedLink.parentId, parsedLink.childIds);
+  });
+}
+
+export function collectRelatedThreadIdsFromSnapshot(threadId: string, items: ConversationItem[]) {
+  const relatedThreadIds = new Set<string>();
+  items.forEach((item) => {
+    if (item.kind !== "tool" || item.toolType !== "collabToolCall") {
+      return;
+    }
+    const parsedLink = parseCollabLinkDetail(item.detail, threadId);
+    if (!parsedLink) {
+      return;
+    }
+    parsedLink.childIds.forEach((childId) => {
+      if (!childId || childId === threadId) {
+        return;
+      }
+      relatedThreadIds.add(childId);
+    });
+  });
+  return Array.from(relatedThreadIds);
+}
+
+export function isAskUserQuestionToolItem(
+  item: ConversationItem,
+): item is Extract<ConversationItem, { kind: "tool" }> {
+  if (item.kind !== "tool") {
+    return false;
+  }
+  const normalizedToolType = item.toolType.trim().toLowerCase();
+  if (
+    normalizedToolType === "askuserquestion" ||
+    normalizedToolType === "ask_user_question"
+  ) {
+    return true;
+  }
+  const normalizedTitle = item.title.trim().toLowerCase();
+  return (
+    normalizedTitle.includes("askuserquestion") ||
+    normalizedTitle.includes("ask_user_question")
+  );
+}
+
+export function isTerminalToolStatus(status?: string) {
+  if (!status) {
+    return false;
+  }
+  const normalized = status.trim().toLowerCase();
+  return /(complete|completed|success|succeed(?:ed)?|done|finish(?:ed)?|fail|error|cancel(?:led)?|abort|timeout|timed[_ -]?out)/.test(
+    normalized,
+  );
+}
+
+export function shouldReplaceUserInputQueueFromSnapshot(
+  items: ConversationItem[],
+  queueLength: number,
+  hasLocalPendingQueue: boolean,
+) {
+  if (queueLength > 0) {
+    return true;
+  }
+  const hasSubmittedRecord = items.some(
+    (item) => item.kind === "tool" && item.toolType === "requestUserInputSubmitted",
+  );
+  if (hasSubmittedRecord) {
+    return true;
+  }
+  if (hasLocalPendingQueue) {
+    return false;
+  }
+  return true;
+}

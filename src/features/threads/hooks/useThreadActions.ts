@@ -57,10 +57,7 @@ import {
   toSharedThreadSummary,
 } from "../../shared-session/runtime/sharedSessionSummaries";
 import { normalizeSharedSessionEngine } from "../../shared-session/utils/sharedSessionEngines";
-import {
-  asString,
-  asNumber,
-} from "../utils/threadNormalize";
+import { asString, asNumber } from "../utils/threadNormalize";
 import {
   saveThreadActivity,
 } from "../utils/threadStorage";
@@ -71,9 +68,36 @@ import {
 } from "../utils/claudeRewindRestore";
 import {
   collectKnownCodexThreadIds,
-  matchesWorkspacePath,
   normalizeComparableWorkspacePath,
 } from "./useThreadActions.workspacePath";
+import {
+  collectRelatedThreadIdsFromSnapshot,
+  extractThreadSizeBytes,
+  findFirstHistoryUserMessageId,
+  findLastUserMessageIndexById,
+  findLatestHistoryUserMessageId,
+  inferThreadEngineSource,
+  isUserConversationMessage,
+  isAskUserQuestionToolItem,
+  isLocalSessionScanUnavailable,
+  isTerminalToolStatus,
+  isThreadResumeNotFoundError,
+  isWorkspaceNotConnectedError,
+  mapWithConcurrency,
+  mergeGeminiSessionSummaries,
+  mergeRecoveredThreadSummaries,
+  normalizeGeminiSessionSummaries,
+  normalizeComparableRewindText,
+  resolveClaudeRewindMessageIdFromHistory,
+  resolveRewindSupportedEngine,
+  resolveThreadSourceMeta,
+  restoreThreadParentLinksFromSnapshot,
+  selectReplacementThreadSummary,
+  shouldIncludeWorkspaceThreadEntry,
+  shouldReplaceUserInputQueueFromSnapshot,
+  withTimeout,
+  type GeminiSessionSummary,
+} from "./useThreadActions.helpers";
 import {
   normalizeRewindMode,
   shouldRestoreWorkspaceFiles,
@@ -109,6 +133,7 @@ type UseThreadActionsOptions = {
     oldThreadId: string,
     newThreadId: string,
   ) => void;
+  rememberThreadAlias?: (oldThreadId: string, newThreadId: string) => void;
   useUnifiedHistoryLoader?: boolean;
 };
 
@@ -119,546 +144,17 @@ const THREAD_LIST_MAX_EMPTY_PAGES_WITH_ACTIVITY = 20;
 const THREAD_LIST_MAX_TOTAL_PAGES = 40;
 const THREAD_LIST_MAX_EMPTY_PAGES_LOAD_OLDER = 10;
 const THREAD_LIST_MAX_FETCH_DURATION_MS = 1_500;
+const THREAD_LIST_LIVE_REQUEST_TIMEOUT_MS = 1_600;
+const THREAD_RECOVERY_MAX_PAGES = 3;
+const THREAD_RECOVERY_MAX_FETCH_DURATION_MS = 800;
 const RELATED_THREAD_LOAD_CONCURRENCY = 2;
 const DEFAULT_CLAUDE_CONTEXT_WINDOW = 200_000;
 const GEMINI_SESSION_CACHE_TTL_MS = 60_000;
 const GEMINI_SESSION_FETCH_TIMEOUT_MS = 800;
-const CLAUDE_HISTORY_MESSAGE_ID_REGEX =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-type MessageConversationItem = Extract<ConversationItem, { kind: "message" }>;
-type UserConversationMessage = MessageConversationItem & { role: "user" };
-const CODEX_BACKGROUND_HELPER_PROMPT_PREFIXES = [
-  "Generate a concise title for a coding chat thread from the first user message.",
-  "You create concise run metadata for a coding task.",
-  "You are generating OpenSpec project context.",
-  "请生成一次提交（commit）信息，提交信息需遵循 Conventional Commits 规范，并且全部使用中文。",
-  "Please generate a commit message. The commit message must follow the Conventional Commits specification and be written entirely in English.",
-  "Generate a concise git commit message for the following changes.",
-] as const;
-
-function isWorkspaceNotConnectedError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  return message.toLowerCase().includes("workspace not connected");
-}
-
-function isUserConversationMessage(
-  item: ConversationItem | undefined,
-): item is UserConversationMessage {
-  return item?.kind === "message" && item.role === "user";
-}
-
-function normalizeComparableRewindText(text: string): string {
-  return text.replace(/\s+/g, " ").trim();
-}
-
-function findLastUserMessageIndexById(
-  items: UserConversationMessage[],
-  messageId: string,
-): number {
-  const normalizedMessageId = messageId.trim();
-  if (!normalizedMessageId) {
-    return -1;
-  }
-  for (let index = items.length - 1; index >= 0; index -= 1) {
-    const item = items[index];
-    if (!item) {
-      continue;
-    }
-    if (item.id.trim() === normalizedMessageId) {
-      return index;
-    }
-  }
-  return -1;
-}
-
-function resolveClaudeRewindMessageIdFromHistory(params: {
-  requestedMessageId: string;
-  threadItems: ConversationItem[];
-  historyItems: ConversationItem[];
-}): string {
-  const requestedMessageId = params.requestedMessageId.trim();
-  if (!requestedMessageId) {
-    return "";
-  }
-  if (CLAUDE_HISTORY_MESSAGE_ID_REGEX.test(requestedMessageId)) {
-    return requestedMessageId;
-  }
-
-  const localUserItems = params.threadItems.filter(isUserConversationMessage);
-  const targetLocalIndex = localUserItems.findIndex(
-    (item) => item.id.trim() === requestedMessageId,
-  );
-  if (targetLocalIndex < 0) {
-    return requestedMessageId;
-  }
-  const targetLocalItem = localUserItems[targetLocalIndex];
-  if (!targetLocalItem) {
-    return requestedMessageId;
-  }
-
-  const historyUserItems = params.historyItems
-    .filter(isUserConversationMessage)
-    .map((item) => ({
-      id: item.id.trim(),
-      text: normalizeComparableRewindText(item.text),
-    }))
-    .filter((item) => item.id.length > 0);
-  if (historyUserItems.length < 1) {
-    return requestedMessageId;
-  }
-  if (historyUserItems.some((item) => item.id === requestedMessageId)) {
-    return requestedMessageId;
-  }
-
-  const targetText = normalizeComparableRewindText(targetLocalItem.text);
-  if (targetText) {
-    const targetOccurrenceByText =
-      localUserItems.reduce((count, item, index) => {
-        if (index > targetLocalIndex) {
-          return count;
-        }
-        return normalizeComparableRewindText(item.text) === targetText
-          ? count + 1
-          : count;
-      }, 0) || 1;
-    const historyMatches = historyUserItems.filter(
-      (item) => item.text === targetText,
-    );
-    if (historyMatches.length >= targetOccurrenceByText) {
-      return historyMatches[targetOccurrenceByText - 1]?.id ?? requestedMessageId;
-    }
-    if (historyMatches.length > 0) {
-      return historyMatches[historyMatches.length - 1]?.id ?? requestedMessageId;
-    }
-  }
-
-  const positionFromLatest = localUserItems.length - 1 - targetLocalIndex;
-  const fallbackIndex = historyUserItems.length - 1 - positionFromLatest;
-  if (fallbackIndex >= 0 && fallbackIndex < historyUserItems.length) {
-    return historyUserItems[fallbackIndex]?.id ?? requestedMessageId;
-  }
-  return historyUserItems[historyUserItems.length - 1]?.id ?? requestedMessageId;
-}
-
-function findLatestHistoryUserMessageId(items: ConversationItem[]): string {
-  for (let index = items.length - 1; index >= 0; index -= 1) {
-    const item = items[index];
-    if (!isUserConversationMessage(item)) {
-      continue;
-    }
-    const id = item.id.trim();
-    if (!id) {
-      continue;
-    }
-    return id;
-  }
-  return "";
-}
-
-function findFirstHistoryUserMessageId(items: ConversationItem[]): string {
-  for (let index = 0; index < items.length; index += 1) {
-    const item = items[index];
-    if (!isUserConversationMessage(item)) {
-      continue;
-    }
-    const id = item.id.trim();
-    if (!id) {
-      continue;
-    }
-    return id;
-  }
-  return "";
-}
-
-type GeminiSessionSummary = {
-  sessionId: string;
-  firstMessage: string;
-  updatedAt: number;
-  fileSizeBytes?: number;
-};
-
-
-function normalizeThreadSizeBytes(value: unknown) {
-  const sizeBytes = asNumber(value);
-  return sizeBytes > 0 ? Math.round(sizeBytes) : undefined;
-}
-
-function extractThreadSizeBytes(record: Record<string, unknown>) {
-  return normalizeThreadSizeBytes(
-    record.sizeBytes ??
-      record.size_bytes ??
-      record.fileSizeBytes ??
-      record.file_size_bytes ??
-      record.byteSize ??
-      record.byte_size ??
-      record.bytes,
-  );
-}
-
-function normalizeGeminiSessionSummary(value: unknown): GeminiSessionSummary | null {
-  if (!value || typeof value !== "object") {
-    return null;
-  }
-  const record = value as Record<string, unknown>;
-  const sessionId = asString(record.sessionId ?? record.session_id).trim();
-  if (!sessionId) {
-    return null;
-  }
-  const fileSizeBytes = extractThreadSizeBytes(record);
-  return {
-    sessionId,
-    firstMessage: asString(record.firstMessage ?? record.first_message).trim(),
-    updatedAt: asNumber(record.updatedAt ?? record.updated_at),
-    ...(fileSizeBytes !== undefined ? { fileSizeBytes } : {}),
-  };
-}
-
-function normalizeGeminiSessionSummaries(value: unknown): GeminiSessionSummary[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  const summaries: GeminiSessionSummary[] = [];
-  value.forEach((entry) => {
-    const summary = normalizeGeminiSessionSummary(entry);
-    if (summary) {
-      summaries.push(summary);
-    }
-  });
-  return summaries;
-}
-
-
-function mergeGeminiSessionSummaries(
-  baseSummaries: ThreadSummary[],
-  geminiSessions: GeminiSessionSummary[],
-  workspaceId: string,
-  mappedTitles: Record<string, string>,
-  getCustomName: (workspaceId: string, threadId: string) => string | undefined,
-): ThreadSummary[] {
-  if (geminiSessions.length === 0) {
-    return baseSummaries;
-  }
-  const mergedById = new Map<string, ThreadSummary>();
-  baseSummaries.forEach((entry) => mergedById.set(entry.id, entry));
-  geminiSessions.forEach((session) => {
-    const id = `gemini:${session.sessionId}`;
-    const prev = mergedById.get(id);
-    const updatedAt = Number.isFinite(session.updatedAt)
-      ? Math.max(0, session.updatedAt)
-      : 0;
-    const next: ThreadSummary = {
-      id,
-      name:
-        mappedTitles[id] ||
-        getCustomName(workspaceId, id) ||
-        previewThreadName(session.firstMessage, "Gemini Session"),
-      updatedAt,
-      sizeBytes: session.fileSizeBytes,
-      engineSource: "gemini",
-    };
-    if (!prev || next.updatedAt >= prev.updatedAt) {
-      mergedById.set(id, next);
-    }
-  });
-  return Array.from(mergedById.values()).sort((a, b) => b.updatedAt - a.updatedAt);
-}
-
-async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T | null> {
-  let timer: ReturnType<typeof setTimeout> | null = null;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<null>((resolve) => {
-        timer = setTimeout(() => resolve(null), timeoutMs);
-      }),
-    ]);
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
-  }
-}
-
-async function mapWithConcurrency<T>(
-  items: string[],
-  concurrency: number,
-  worker: (item: string) => Promise<T>,
-): Promise<T[]> {
-  if (items.length === 0) {
-    return [];
-  }
-  const normalizedConcurrency = Math.max(1, Math.floor(concurrency));
-  const results: T[] = [];
-  let cursor = 0;
-  const runWorker = async () => {
-    while (cursor < items.length) {
-      const currentIndex = cursor;
-      cursor += 1;
-      const item = items[currentIndex];
-      if (!item) {
-        continue;
-      }
-      const result = await worker(item);
-      results.push(result);
-    }
-  };
-  const workers = Array.from(
-    { length: Math.min(normalizedConcurrency, items.length) },
-    () => runWorker(),
-  );
-  await Promise.all(workers);
-  return results;
-}
-
-type RewindSupportedEngine = "claude" | "codex";
 type RewindFromMessageOptions = {
   activate?: boolean;
   mode?: RewindMode;
 };
-
-function resolveRewindSupportedEngine(
-  threadId: string,
-): RewindSupportedEngine | null {
-  const normalized = threadId.trim().toLowerCase();
-  if (!normalized) {
-    return null;
-  }
-  if (normalized.startsWith("claude:")) {
-    return "claude";
-  }
-  if (normalized.startsWith("codex:")) {
-    return "codex";
-  }
-  if (
-    normalized.startsWith("claude-pending-") ||
-    normalized.startsWith("codex-pending-") ||
-    normalized.startsWith("gemini:") ||
-    normalized.startsWith("gemini-pending-") ||
-    normalized.startsWith("opencode:") ||
-    normalized.startsWith("opencode-pending-")
-  ) {
-    return null;
-  }
-  if (normalized.includes(":")) {
-    return null;
-  }
-  return "codex";
-}
-
-function isLocalSessionScanUnavailable(result: Record<string, unknown>): boolean {
-  const marker = asString(result.partialSource ?? result.partial_source)
-    .trim()
-    .toLowerCase();
-  return marker === "local-session-scan-unavailable";
-}
-
-function shouldIncludeWorkspaceThreadEntry(
-  thread: Record<string, unknown>,
-  workspacePath: string,
-  knownCodexThreadIds: Set<string>,
-  allowKnownCodexWithoutCwd: boolean,
-): boolean {
-  const threadCwd = asString(thread.cwd).trim();
-  if (matchesWorkspacePath(threadCwd, workspacePath)) {
-    return shouldIncludeThreadEntry(thread);
-  }
-  if (!allowKnownCodexWithoutCwd || threadCwd.length > 0) {
-    return false;
-  }
-  const threadId = asString(thread.id).trim();
-  if (!threadId || !knownCodexThreadIds.has(threadId)) {
-    return false;
-  }
-  return shouldIncludeThreadEntry(thread);
-}
-
-function toBooleanFlag(value: unknown): boolean {
-  if (typeof value === "boolean") {
-    return value;
-  }
-  if (typeof value === "number") {
-    return value !== 0;
-  }
-  if (typeof value === "string") {
-    const normalized = value.trim().toLowerCase();
-    return normalized === "1" || normalized === "true" || normalized === "yes";
-  }
-  return false;
-}
-
-function isArchivedThread(thread: Record<string, unknown>): boolean {
-  const archivedFlag = toBooleanFlag(thread.archived ?? thread.isArchived);
-  if (archivedFlag) {
-    return true;
-  }
-  return asNumber(thread.archivedAt ?? thread.archived_at) > 0;
-}
-
-function normalizeThreadMetaValue(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
-
-function resolveThreadSourceMeta(thread: Record<string, unknown>): Pick<
-  ThreadSummary,
-  "source" | "provider" | "sourceLabel"
-> {
-  const source =
-    normalizeThreadMetaValue(thread.source) ??
-    normalizeThreadMetaValue(thread.sessionSource);
-  const provider =
-    normalizeThreadMetaValue(thread.provider) ??
-    normalizeThreadMetaValue(thread.providerId) ??
-    normalizeThreadMetaValue(thread.sessionProvider);
-  const sourceLabel =
-    normalizeThreadMetaValue(thread.sourceLabel) ??
-    (source && provider ? `${source}/${provider}` : source ?? provider);
-  return {
-    source,
-    provider,
-    sourceLabel,
-  };
-}
-
-function shouldIncludeThreadEntry(thread: Record<string, unknown>): boolean {
-  if (isArchivedThread(thread)) {
-    return false;
-  }
-  const previewCandidates = [
-    asString(thread.preview).trim(),
-    asString(thread.title).trim(),
-    asString(thread.name).trim(),
-  ].filter(Boolean);
-  const isCodexHelperThread = previewCandidates.some((preview) =>
-    CODEX_BACKGROUND_HELPER_PROMPT_PREFIXES.some((prefix) =>
-      preview.startsWith(prefix),
-    ),
-  );
-  if (isCodexHelperThread) {
-    return false;
-  }
-  return true;
-}
-
-function parseCollabLinkDetail(detail: string, fallbackParentId: string) {
-  const trimmed = detail.trim();
-  if (!trimmed) {
-    return null;
-  }
-  const hasUnicodeArrow = trimmed.includes("→");
-  const hasAsciiArrow = !hasUnicodeArrow && trimmed.includes("->");
-  if (!hasUnicodeArrow && !hasAsciiArrow) {
-    return null;
-  }
-  const [leftSideRaw, rightSideRaw] = hasUnicodeArrow
-    ? trimmed.split("→", 2)
-    : trimmed.split("->", 2);
-  const leftSide = (leftSideRaw ?? "").trim();
-  const rightSide = (rightSideRaw ?? "").trim();
-  const parentMatch = leftSide.match(/^From\s+(.+)$/i);
-  const parentId = (parentMatch?.[1]?.trim() || fallbackParentId).trim();
-  const childIds = rightSide
-    .split(",")
-    .map((entry) => entry.trim())
-    .filter(Boolean);
-  if (!parentId || childIds.length === 0) {
-    return null;
-  }
-  return { parentId, childIds };
-}
-
-function restoreThreadParentLinksFromSnapshot(
-  threadId: string,
-  items: ConversationItem[],
-  updateThreadParent?: (parentId: string, childIds: string[]) => void,
-) {
-  if (!updateThreadParent) {
-    return;
-  }
-  items.forEach((item) => {
-    if (item.kind !== "tool" || item.toolType !== "collabToolCall") {
-      return;
-    }
-    const parsedLink = parseCollabLinkDetail(item.detail, threadId);
-    if (!parsedLink) {
-      return;
-    }
-    updateThreadParent(parsedLink.parentId, parsedLink.childIds);
-  });
-}
-
-function collectRelatedThreadIdsFromSnapshot(threadId: string, items: ConversationItem[]) {
-  const relatedThreadIds = new Set<string>();
-  items.forEach((item) => {
-    if (item.kind !== "tool" || item.toolType !== "collabToolCall") {
-      return;
-    }
-    const parsedLink = parseCollabLinkDetail(item.detail, threadId);
-    if (!parsedLink) {
-      return;
-    }
-    parsedLink.childIds.forEach((childId) => {
-      if (!childId || childId === threadId) {
-        return;
-      }
-      relatedThreadIds.add(childId);
-    });
-  });
-  return Array.from(relatedThreadIds);
-}
-
-function isAskUserQuestionToolItem(
-  item: ConversationItem,
-): item is Extract<ConversationItem, { kind: "tool" }> {
-  if (item.kind !== "tool") {
-    return false;
-  }
-  const normalizedToolType = item.toolType.trim().toLowerCase();
-  if (
-    normalizedToolType === "askuserquestion" ||
-    normalizedToolType === "ask_user_question"
-  ) {
-    return true;
-  }
-  const normalizedTitle = item.title.trim().toLowerCase();
-  return (
-    normalizedTitle.includes("askuserquestion") ||
-    normalizedTitle.includes("ask_user_question")
-  );
-}
-
-function isTerminalToolStatus(status?: string) {
-  if (!status) {
-    return false;
-  }
-  const normalized = status.trim().toLowerCase();
-  return /(complete|completed|success|succeed(?:ed)?|done|finish(?:ed)?|fail|error|cancel(?:led)?|abort|timeout|timed[_ -]?out)/.test(
-    normalized,
-  );
-}
-
-function shouldReplaceUserInputQueueFromSnapshot(
-  items: ConversationItem[],
-  queueLength: number,
-  hasLocalPendingQueue: boolean,
-) {
-  if (queueLength > 0) {
-    return true;
-  }
-  const hasSubmittedRecord = items.some(
-    (item) => item.kind === "tool" && item.toolType === "requestUserInputSubmitted",
-  );
-  if (hasSubmittedRecord) {
-    return true;
-  }
-  if (hasLocalPendingQueue) {
-    return false;
-  }
-  return true;
-}
 
 export function useThreadActions({
   dispatch,
@@ -677,6 +173,7 @@ export function useThreadActions({
   updateThreadParent,
   onThreadTitleMappingsLoaded,
   onRenameThreadTitleMapping,
+  rememberThreadAlias,
   useUnifiedHistoryLoader = false,
 }: UseThreadActionsOptions) {
   // Map workspaceId → filesystem path, populated in listThreadsForWorkspace
@@ -922,55 +419,67 @@ export function useThreadActions({
         return threadId;
       }
       if (useUnifiedHistoryLoader) {
-        try {
-          const workspacePath = workspacePathsByIdRef.current[workspaceId] ?? null;
-          const createHistoryLoader = (targetThreadId: string) =>
-            targetThreadId.startsWith("shared:")
-              ? createSharedHistoryLoader({
+        const createHistoryLoader = (targetThreadId: string) =>
+          targetThreadId.startsWith("shared:")
+            ? createSharedHistoryLoader({
+                workspaceId,
+                loadSharedSession: loadSharedSessionService,
+              })
+            : targetThreadId.startsWith("claude:")
+            ? createClaudeHistoryLoader({
+                workspaceId,
+                workspacePath: workspacePathsByIdRef.current[workspaceId] ?? null,
+                loadClaudeSession: loadClaudeSessionService,
+              })
+            : targetThreadId.startsWith("gemini:")
+              ? createGeminiHistoryLoader({
                   workspaceId,
-                  loadSharedSession: loadSharedSessionService,
+                  workspacePath: workspacePathsByIdRef.current[workspaceId] ?? null,
+                  loadGeminiSession: loadGeminiSessionService,
                 })
-              : targetThreadId.startsWith("claude:")
-              ? createClaudeHistoryLoader({
+            : targetThreadId.startsWith("opencode:")
+              ? createOpenCodeHistoryLoader({
                   workspaceId,
-                  workspacePath,
-                  loadClaudeSession: loadClaudeSessionService,
+                  resumeThread: resumeThreadService,
                 })
-              : targetThreadId.startsWith("gemini:")
-                ? createGeminiHistoryLoader({
-                    workspaceId,
-                    workspacePath,
-                    loadGeminiSession: loadGeminiSessionService,
-                  })
-              : targetThreadId.startsWith("opencode:")
-                ? createOpenCodeHistoryLoader({
-                    workspaceId,
-                    resumeThread: resumeThreadService,
-                  })
-                : createCodexHistoryLoader({
-                    workspaceId,
-                    resumeThread: resumeThreadService,
-                    loadCodexSession: loadCodexSessionService,
-                  });
-          const loader = createHistoryLoader(threadId);
-          const snapshot = await loader.load(threadId);
+              : createCodexHistoryLoader({
+                  workspaceId,
+                  resumeThread: resumeThreadService,
+                  loadCodexSession: loadCodexSessionService,
+                });
+        const hydrateHistorySnapshot = async (
+          effectiveThreadId: string,
+          snapshot: Awaited<ReturnType<ReturnType<typeof createHistoryLoader>["load"]>>,
+        ) => {
           const snapshotItems = snapshot.items;
           dispatch({
             type: "ensureThread",
             workspaceId,
-            threadId,
+            threadId: effectiveThreadId,
             engine: snapshot.engine,
           });
           if (snapshotItems.length > 0) {
-            dispatch({ type: "setThreadItems", threadId, items: snapshotItems });
+            dispatch({
+              type: "setThreadItems",
+              threadId: effectiveThreadId,
+              items: snapshotItems,
+            });
           }
-          dispatch({ type: "setThreadPlan", threadId, plan: snapshot.plan });
+          dispatch({
+            type: "setThreadPlan",
+            threadId: effectiveThreadId,
+            plan: snapshot.plan,
+          });
+          const effectiveLocalItems =
+            effectiveThreadId === threadId
+              ? localItems
+              : (itemsByThread[effectiveThreadId] ?? []);
           const hasLocalPendingQueue = userInputRequests.some(
             (request) =>
               request.workspace_id === workspaceId &&
-              request.params.thread_id === threadId,
+              request.params.thread_id === effectiveThreadId,
           );
-          const hasLocalPendingAskTool = localItems.some(
+          const hasLocalPendingAskTool = effectiveLocalItems.some(
             (item) =>
               isAskUserQuestionToolItem(item) &&
               !isTerminalToolStatus(item.status),
@@ -985,16 +494,16 @@ export function useThreadActions({
             dispatch({
               type: "clearUserInputRequestsForThread",
               workspaceId,
-              threadId,
+              threadId: effectiveThreadId,
             });
           }
           restoreThreadParentLinksFromSnapshot(
-            threadId,
+            effectiveThreadId,
             snapshotItems,
             updateThreadParent,
           );
           const relatedThreadIds = collectRelatedThreadIdsFromSnapshot(
-            threadId,
+            effectiveThreadId,
             snapshotItems,
           );
           relatedThreadIds.forEach((relatedThreadId) => {
@@ -1008,7 +517,7 @@ export function useThreadActions({
           const pendingRelatedThreadIds = relatedThreadIds.filter(
             (relatedThreadId) =>
               Boolean(relatedThreadId) &&
-              relatedThreadId !== threadId &&
+              relatedThreadId !== effectiveThreadId &&
               !loadedThreadsRef.current[relatedThreadId],
           );
           await mapWithConcurrency(
@@ -1046,7 +555,7 @@ export function useThreadActions({
                   label: "thread/history related loader error",
                   payload: {
                     workspaceId,
-                    threadId,
+                    threadId: effectiveThreadId,
                     relatedThreadId,
                     error: error instanceof Error ? error.message : String(error),
                   },
@@ -1066,14 +575,228 @@ export function useThreadActions({
               label: "thread/history fallback",
               payload: {
                 workspaceId,
-                threadId,
+                threadId: effectiveThreadId,
                 warnings: snapshot.fallbackWarnings,
               },
             });
           }
-          loadedThreadsRef.current[threadId] = true;
+          loadedThreadsRef.current[effectiveThreadId] = true;
+        };
+        const recoverReplacementThreadId = async () => {
+          const existingSummaries =
+            latestThreadsByWorkspaceRef.current[workspaceId] ??
+            threadsByWorkspace[workspaceId] ??
+            [];
+          const staleSummary =
+            existingSummaries.find((entry) => entry.id === threadId) ??
+            (threadsByWorkspace[workspaceId] ?? []).find(
+              (entry) => entry.id === threadId,
+            );
+          const engineSource = inferThreadEngineSource(threadId, staleSummary);
+          let nextSummaries = existingSummaries;
+          if (engineSource === "codex") {
+            const workspacePath = normalizeComparableWorkspacePath(
+              workspacePathsByIdRef.current[workspaceId] ?? "",
+            );
+            if (workspacePath) {
+              const activeThreadId = activeThreadIdByWorkspace[workspaceId] ?? "";
+              const knownCodexThreadIds = collectKnownCodexThreadIds(
+                existingSummaries,
+                activeThreadId,
+              );
+              const matchingThreads: Record<string, unknown>[] = [];
+              const recoveryStartedAt = Date.now();
+              let pagesFetched = 0;
+              let cursor: string | null = null;
+              do {
+                pagesFetched += 1;
+                const response = (await listThreadsService(
+                  workspaceId,
+                  cursor,
+                  THREAD_LIST_PAGE_SIZE,
+                )) as Record<string, unknown>;
+                const result = (response.result ?? response) as Record<string, unknown>;
+                const data = Array.isArray(result.data)
+                  ? (result.data as Record<string, unknown>[])
+                  : [];
+                const allowKnownCodexWithoutCwd = isLocalSessionScanUnavailable(result);
+                matchingThreads.push(
+                  ...data.filter((entry) =>
+                    shouldIncludeWorkspaceThreadEntry(
+                      entry,
+                      workspacePath,
+                      knownCodexThreadIds,
+                      allowKnownCodexWithoutCwd,
+                    ),
+                  ),
+                );
+                cursor =
+                  (result.nextCursor ?? result.next_cursor ?? null) as string | null;
+                const replacementCandidate = selectReplacementThreadSummary({
+                  staleThreadId: threadId,
+                  staleSummary,
+                  summaries: mergeRecoveredThreadSummaries(
+                    existingSummaries,
+                    matchingThreads
+                      .map((entry, index) => {
+                        const id = asString(entry.id).trim();
+                        const preview = asString(entry.preview).trim();
+                        const customName = getCustomName(workspaceId, id);
+                        const fallbackName = `Agent ${index + 1}`;
+                        return {
+                          id,
+                          name: customName
+                            ? customName
+                            : preview.length > 0
+                              ? previewThreadName(preview, fallbackName)
+                              : fallbackName,
+                          updatedAt: getThreadTimestamp(entry),
+                          sizeBytes: extractThreadSizeBytes(entry),
+                          engineSource: "codex" as const,
+                          threadKind: "native" as const,
+                          ...resolveThreadSourceMeta(entry),
+                        } satisfies ThreadSummary;
+                      })
+                      .filter((entry) => entry.id),
+                    "codex",
+                  ),
+                });
+                if (replacementCandidate) {
+                  break;
+                }
+                if (pagesFetched >= THREAD_RECOVERY_MAX_PAGES) {
+                  break;
+                }
+                if (Date.now() - recoveryStartedAt >= THREAD_RECOVERY_MAX_FETCH_DURATION_MS) {
+                  break;
+                }
+              } while (cursor);
+              const refreshedCodexSummaries = matchingThreads
+                .map((entry, index) => {
+                  const id = asString(entry.id).trim();
+                  const preview = asString(entry.preview).trim();
+                  const customName = getCustomName(workspaceId, id);
+                  const fallbackName = `Agent ${index + 1}`;
+                  return {
+                    id,
+                    name: customName
+                      ? customName
+                      : preview.length > 0
+                        ? previewThreadName(preview, fallbackName)
+                        : fallbackName,
+                    updatedAt: getThreadTimestamp(entry),
+                    sizeBytes: extractThreadSizeBytes(entry),
+                    engineSource: "codex" as const,
+                    threadKind: "native" as const,
+                    ...resolveThreadSourceMeta(entry),
+                  } satisfies ThreadSummary;
+                })
+                .filter((entry) => entry.id);
+              nextSummaries = mergeRecoveredThreadSummaries(
+                existingSummaries,
+                refreshedCodexSummaries,
+                "codex",
+              );
+            }
+          } else if (engineSource === "opencode") {
+            const sessions = await getOpenCodeSessionListService(workspaceId).catch(
+              () => [],
+            );
+            const refreshedOpenCodeSummaries = (Array.isArray(sessions) ? sessions : [])
+              .map((session) => {
+                const sessionUpdatedAt =
+                  typeof session.updatedAt === "number" && Number.isFinite(session.updatedAt)
+                    ? Math.max(0, session.updatedAt)
+                    : 0;
+                const id = `opencode:${session.sessionId}`;
+                return {
+                  id,
+                  name:
+                    getCustomName(workspaceId, id) ||
+                    previewThreadName(session.title, "OpenCode Session"),
+                  updatedAt: sessionUpdatedAt,
+                  sizeBytes: extractThreadSizeBytes(session as Record<string, unknown>),
+                  engineSource: "opencode" as const,
+                  threadKind: "native" as const,
+                } satisfies ThreadSummary;
+              })
+              .filter((entry) => entry.id);
+            nextSummaries = mergeRecoveredThreadSummaries(
+              existingSummaries,
+              refreshedOpenCodeSummaries,
+              "opencode",
+            );
+          }
+          if (nextSummaries !== existingSummaries) {
+            dispatch({
+              type: "setThreads",
+              workspaceId,
+              threads: nextSummaries,
+            });
+            latestThreadsByWorkspaceRef.current = {
+              ...latestThreadsByWorkspaceRef.current,
+              [workspaceId]: nextSummaries,
+            };
+          }
+          return (
+            selectReplacementThreadSummary({
+              staleThreadId: threadId,
+              summaries: nextSummaries,
+              staleSummary,
+            })?.id ?? null
+          );
+        };
+        try {
+          const snapshot = await createHistoryLoader(threadId).load(threadId);
+          await hydrateHistorySnapshot(threadId, snapshot);
           return threadId;
         } catch (error) {
+          if (isThreadResumeNotFoundError(error)) {
+            try {
+              const replacementThreadId = await recoverReplacementThreadId();
+              if (replacementThreadId) {
+                const replacementSnapshot = await createHistoryLoader(
+                  replacementThreadId,
+                ).load(replacementThreadId);
+                await hydrateHistorySnapshot(replacementThreadId, replacementSnapshot);
+                dispatch({
+                  type: "clearUserInputRequestsForThread",
+                  workspaceId,
+                  threadId,
+                });
+                loadedThreadsRef.current[threadId] = false;
+                rememberThreadAlias?.(threadId, replacementThreadId);
+                dispatch({
+                  type: "setActiveThreadId",
+                  workspaceId,
+                  threadId: replacementThreadId,
+                });
+                onDebug?.({
+                  id: `${Date.now()}-history-loader-recovered-thread-alias`,
+                  timestamp: Date.now(),
+                  source: "client",
+                  label: "thread/history recovered stale thread",
+                  payload: {
+                    workspaceId,
+                    staleThreadId: threadId,
+                    replacementThreadId,
+                  },
+                });
+                return replacementThreadId;
+              }
+            } catch (recoveryError) {
+              onDebug?.({
+                id: `${Date.now()}-history-loader-recovery-error`,
+                timestamp: Date.now(),
+                source: "error",
+                label: "thread/history recovery error",
+                payload:
+                  recoveryError instanceof Error
+                    ? recoveryError.message
+                    : String(recoveryError),
+              });
+            }
+          }
           onDebug?.({
             id: `${Date.now()}-history-loader-error`,
             timestamp: Date.now(),
@@ -1286,6 +1009,7 @@ export function useThreadActions({
       }
     },
     [
+      activeThreadIdByWorkspace,
       applyCollabThreadLinksFromThread,
       updateThreadParent,
       dispatch,
@@ -1293,8 +1017,10 @@ export function useThreadActions({
       itemsByThread,
       loadedThreadsRef,
       onDebug,
+      rememberThreadAlias,
       replaceOnResumeRef,
       threadStatusById,
+      threadsByWorkspace,
       userInputRequests,
       useUnifiedHistoryLoader,
     ],
@@ -1995,7 +1721,7 @@ export function useThreadActions({
           pagesFetched += 1;
           let response: Record<string, unknown>;
           try {
-            response = (await (async () => {
+            const liveResponse = await withTimeout((async () => {
               try {
                 return await listThreadsService(workspace.id, cursor, pageSize);
               } catch (error) {
@@ -2012,7 +1738,22 @@ export function useThreadActions({
                 await connectWorkspaceService(workspace.id);
                 return await listThreadsService(workspace.id, cursor, pageSize);
               }
-            })()) as Record<string, unknown>;
+            })(), THREAD_LIST_LIVE_REQUEST_TIMEOUT_MS);
+            if (liveResponse === null) {
+              onDebug?.({
+                id: `${Date.now()}-client-thread-list-live-timeout`,
+                timestamp: Date.now(),
+                source: "error",
+                label: "thread/list live timeout",
+                payload: {
+                  workspaceId: workspace.id,
+                  cursor,
+                  timeoutMs: THREAD_LIST_LIVE_REQUEST_TIMEOUT_MS,
+                },
+              });
+              break;
+            }
+            response = liveResponse as Record<string, unknown>;
           } catch (error) {
             if (!isWorkspaceNotConnectedError(error)) {
               throw error;
@@ -2198,7 +1939,7 @@ export function useThreadActions({
                   getCustomName(workspace.id, id) ||
                   previewThreadName(session.firstMessage, "Claude Session"),
                 updatedAt,
-                sizeBytes: normalizeThreadSizeBytes(session.fileSizeBytes),
+                sizeBytes: extractThreadSizeBytes(session as Record<string, unknown>),
                 engineSource: "claude",
                 threadKind: "native",
               };

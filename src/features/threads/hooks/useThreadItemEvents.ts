@@ -59,11 +59,11 @@ function inferItemEngineSource(
   return isGeminiThread(threadId) ? "gemini" : null;
 }
 
-function shouldIgnoreInterruptedGeminiThread(
+function isInterruptedThread(
   interruptedThreadsRef: MutableRefObject<Set<string>>,
   threadId: string,
 ) {
-  return isGeminiThread(threadId) && interruptedThreadsRef.current.has(threadId);
+  return interruptedThreadsRef.current.has(threadId);
 }
 
 function isClaudeStreamDebugEnabled() {
@@ -269,7 +269,7 @@ export function useThreadItemEvents({
         markedProcessingThreads?: Set<string>;
       },
     ) => {
-      if (shouldIgnoreInterruptedGeminiThread(interruptedThreadsRef, operation.threadId)) {
+      if (isInterruptedThread(interruptedThreadsRef, operation.threadId)) {
         return;
       }
       const ensuredThreads = context?.ensuredThreads;
@@ -421,7 +421,7 @@ export function useThreadItemEvents({
       shouldMarkProcessing: boolean,
       shouldIncrementAgentSegment: boolean,
     ) => {
-      if (shouldIgnoreInterruptedGeminiThread(interruptedThreadsRef, threadId)) {
+      if (isInterruptedThread(interruptedThreadsRef, threadId)) {
         return;
       }
       flushRealtimeDeltaOps();
@@ -631,7 +631,7 @@ export function useThreadItemEvents({
       delta: string;
     }) => {
       // Skip late-arriving deltas for threads that have been interrupted
-      if (interruptedThreadsRef.current.has(threadId)) {
+      if (isInterruptedThread(interruptedThreadsRef, threadId)) {
         logClaudeStream("agent-delta-skipped", {
           workspaceId,
           threadId,
@@ -678,7 +678,7 @@ export function useThreadItemEvents({
       itemId: string;
       text: string;
     }) => {
-      if (shouldIgnoreInterruptedGeminiThread(interruptedThreadsRef, threadId)) {
+      if (isInterruptedThread(interruptedThreadsRef, threadId)) {
         return;
       }
       const resolvedText = applyPendingClaudeMcpOutputNoticeToAgentCompleted(

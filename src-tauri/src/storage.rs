@@ -245,7 +245,9 @@ pub(crate) fn read_settings(path: &PathBuf) -> Result<AppSettings, String> {
         return Ok(AppSettings::default());
     }
     let data = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
-    serde_json::from_str(&data).map_err(|e| e.to_string())
+    let mut settings: AppSettings = serde_json::from_str(&data).map_err(|e| e.to_string())?;
+    settings.sanitize_runtime_pool_settings();
+    Ok(settings)
 }
 
 pub(crate) fn write_settings(path: &PathBuf, settings: &AppSettings) -> Result<(), String> {
@@ -257,8 +259,10 @@ pub(crate) fn write_settings(path: &PathBuf, settings: &AppSettings) -> Result<(
 
 #[cfg(test)]
 mod tests {
-    use super::{read_workspaces, write_workspaces, write_workspaces_preserving_existing};
-    use crate::types::{WorkspaceEntry, WorkspaceKind, WorkspaceSettings};
+    use super::{
+        read_settings, read_workspaces, write_workspaces, write_workspaces_preserving_existing,
+    };
+    use crate::types::{AppSettings, WorkspaceEntry, WorkspaceKind, WorkspaceSettings};
     use std::sync::{Arc, Barrier};
     use std::thread;
     use uuid::Uuid;
@@ -565,5 +569,27 @@ mod tests {
         let persisted: Vec<WorkspaceEntry> =
             serde_json::from_str(&raw_after).expect("parse unchanged file");
         assert_eq!(persisted.len(), 2);
+    }
+
+    #[test]
+    fn read_settings_sanitizes_runtime_pool_budget_fields() {
+        let temp_dir = std::env::temp_dir().join(format!("moss-x-test-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&temp_dir).expect("create temp dir");
+        let path = temp_dir.join("settings.json");
+
+        let mut settings = AppSettings::default();
+        settings.codex_max_hot_runtimes = 42;
+        settings.codex_max_warm_runtimes = 88;
+        settings.codex_warm_ttl_seconds = 1;
+        std::fs::write(
+            &path,
+            serde_json::to_string(&settings).expect("serialize settings"),
+        )
+        .expect("write settings");
+
+        let read = read_settings(&path).expect("read settings");
+        assert_eq!(read.codex_max_hot_runtimes, 8);
+        assert_eq!(read.codex_max_warm_runtimes, 16);
+        assert_eq!(read.codex_warm_ttl_seconds, 15);
     }
 }

@@ -35,11 +35,9 @@ export function pushErrorToast(input: ErrorToastInput) {
 
   return toast.id;
 }
-
 export function subscribeErrorToasts(listener: ErrorToastListener) {
   errorToastListeners.add(listener);
   return () => {
     errorToastListeners.delete(listener);
   };
 }
-

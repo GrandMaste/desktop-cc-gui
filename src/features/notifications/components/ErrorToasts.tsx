@@ -34,4 +34,3 @@ export function ErrorToasts({ toasts, onDismiss }: ErrorToastsProps) {
     </div>
   );
 }
-

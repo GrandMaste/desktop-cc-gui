@@ -1,6 +1,11 @@
 use super::*;
+use tokio::time::Duration;
 
 mod git;
+
+const SESSION_HEALTH_PROBE_TIMEOUT_SECS: u64 = 3;
+const DELETE_ARCHIVE_TIMEOUT_MS: u64 = 2_000;
+const LIST_THREADS_LIVE_TIMEOUT_MS: u64 = 1_500;
 
 fn is_valid_claude_model_for_passthrough(model: &str) -> bool {
     let trimmed = model.trim();
@@ -23,10 +28,29 @@ pub(super) struct CodexRuntimeReloadResult {
 
 impl DaemonState {
     async fn ensure_codex_session_for_workspace(&self, workspace_id: &str) -> Result<(), String> {
-        {
+        let existing_session = {
             let sessions = self.sessions.lock().await;
-            if sessions.contains_key(workspace_id) {
-                return Ok(());
+            sessions.get(workspace_id).cloned()
+        };
+        if let Some(session) = existing_session {
+            match session
+                .probe_health(Duration::from_secs(SESSION_HEALTH_PROBE_TIMEOUT_SECS))
+                .await
+            {
+                Ok(()) => return Ok(()),
+                Err(error) => {
+                    log::warn!(
+                        "[daemon.ensure_codex_session_for_workspace] stale session detected for workspace {}: {}",
+                        workspace_id,
+                        error
+                    );
+                    workspaces_core::disconnect_workspace_session_core(
+                        &self.sessions,
+                        None,
+                        workspace_id,
+                    )
+                    .await;
+                }
             }
         }
         self.connect_workspace(
@@ -419,6 +443,7 @@ impl DaemonState {
             &self.workspaces,
             &self.sessions,
             &self.app_settings,
+            None,
             move |entry, default_bin, codex_args, codex_home| {
                 spawn_with_client(
                     self.event_sink.clone(),
@@ -456,6 +481,7 @@ impl DaemonState {
                 &self.workspaces,
                 &self.sessions,
                 &self.app_settings,
+                None,
                 |entry, default_bin, codex_args, codex_home| {
                     spawn_with_client(
                         self.event_sink.clone(),
@@ -518,6 +544,7 @@ impl DaemonState {
             &self.workspaces,
             &self.sessions,
             &self.app_settings,
+            None,
             |entry, default_bin, codex_args, codex_home| {
                 spawn_with_client(
                     self.event_sink.clone(),
@@ -1667,7 +1694,8 @@ impl DaemonState {
             .map(ToString::to_string)
             .ok_or_else(|| "codex rewind response missing child thread id".to_string())?;
 
-        workspaces_core::disconnect_workspace_session_core(&self.sessions, &workspace_id).await;
+        workspaces_core::disconnect_workspace_session_core(&self.sessions, None, &workspace_id)
+            .await;
         self.ensure_codex_session_for_workspace(&workspace_id)
             .await?;
         codex_core::resume_thread_core(&self.sessions, workspace_id, rewound_thread_id).await?;
@@ -1681,7 +1709,17 @@ impl DaemonState {
         cursor: Option<String>,
         limit: Option<u32>,
     ) -> Result<Value, String> {
-        codex_core::list_threads_core(&self.sessions, workspace_id, cursor, limit).await
+        tokio::time::timeout(
+            Duration::from_millis(LIST_THREADS_LIVE_TIMEOUT_MS),
+            codex_core::list_threads_core(&self.sessions, workspace_id, cursor, limit),
+        )
+        .await
+        .map_err(|_| {
+            format!(
+                "live thread/list timed out after {}ms",
+                LIST_THREADS_LIVE_TIMEOUT_MS
+            )
+        })?
     }
 
     pub(super) async fn opencode_session_list(
@@ -1821,10 +1859,11 @@ impl DaemonState {
             return Err("session_id is required".to_string());
         }
 
-        let archive_result = codex_core::archive_thread_core(
+        let archive_result = codex_core::archive_thread_best_effort_core(
             &self.sessions,
             workspace_id.clone(),
             normalized_session_id.clone(),
+            Duration::from_millis(DELETE_ARCHIVE_TIMEOUT_MS),
         )
         .await;
         if let Err(error) = &archive_result {
@@ -1858,6 +1897,85 @@ impl DaemonState {
             "deletedCount": deleted_count,
             "method": "filesystem",
             "archivedBeforeDelete": archive_result.is_ok(),
+        }))
+    }
+
+    pub(super) async fn delete_codex_sessions(
+        &self,
+        workspace_id: String,
+        session_ids: Vec<String>,
+    ) -> Result<Value, String> {
+        let normalized_session_ids = session_ids
+            .into_iter()
+            .map(|session_id| session_id.trim().to_string())
+            .filter(|session_id| !session_id.is_empty())
+            .collect::<Vec<_>>();
+        if normalized_session_ids.is_empty() {
+            return Ok(json!({ "results": [] }));
+        }
+
+        for session_id in &normalized_session_ids {
+            if session_id.contains('/') || session_id.contains('\\') || session_id.contains("..") {
+                return Err("invalid session_id".to_string());
+            }
+        }
+
+        let mut archive_results = HashMap::new();
+        for session_id in &normalized_session_ids {
+            let archive_result = codex_core::archive_thread_best_effort_core(
+                &self.sessions,
+                workspace_id.clone(),
+                session_id.clone(),
+                Duration::from_millis(DELETE_ARCHIVE_TIMEOUT_MS),
+            )
+            .await;
+            if let Err(error) = &archive_result {
+                log::debug!(
+                    "[daemon delete_codex_sessions] Best-effort archive skipped for workspace {} session {}: {}",
+                    workspace_id,
+                    session_id,
+                    error
+                );
+            }
+            archive_results.insert(session_id.clone(), archive_result.is_ok());
+        }
+
+        let delete_results = local_usage::delete_codex_sessions_for_workspace(
+            &self.workspaces,
+            &workspace_id,
+            &normalized_session_ids,
+        )
+        .await?;
+
+        let session = {
+            let sessions = self.sessions.lock().await;
+            sessions.get(&workspace_id).cloned()
+        };
+        if let Some(session) = session {
+            for result in &delete_results {
+                if result.deleted {
+                    session.clear_thread_effective_mode(&result.session_id).await;
+                }
+            }
+        }
+
+        Ok(json!({
+            "results": delete_results
+                .into_iter()
+                .map(|result| {
+                    json!({
+                        "sessionId": result.session_id,
+                        "deleted": result.deleted,
+                        "deletedCount": result.deleted_count,
+                        "method": "filesystem",
+                        "archivedBeforeDelete": archive_results
+                            .get(&result.session_id)
+                            .copied()
+                            .unwrap_or(false),
+                        "error": result.error,
+                    })
+                })
+                .collect::<Vec<_>>(),
         }))
     }
 

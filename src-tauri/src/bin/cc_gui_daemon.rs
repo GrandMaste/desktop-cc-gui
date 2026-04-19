@@ -34,18 +34,28 @@ mod git_utils;
 // module compilable here without pulling the full desktop app state graph.
 mod state {
     use std::collections::HashMap;
+    use std::sync::Arc;
     use tokio::sync::Mutex;
 
-    use crate::types::WorkspaceEntry;
+    use crate::backend::app_server::WorkspaceSession;
+    use crate::engine::EngineManager;
+    use crate::runtime::RuntimeManager;
+    use crate::types::{AppSettings, WorkspaceEntry};
 
     pub(crate) struct AppState {
         pub(crate) workspaces: Mutex<HashMap<String, WorkspaceEntry>>,
+        pub(crate) sessions: Mutex<HashMap<String, Arc<WorkspaceSession>>>,
+        pub(crate) app_settings: Mutex<AppSettings>,
+        pub(crate) runtime_manager: RuntimeManager,
+        pub(crate) engine_manager: EngineManager,
     }
 }
 #[path = "../local_usage.rs"]
 mod local_usage;
 #[path = "../rules.rs"]
 mod rules;
+#[path = "../runtime/mod.rs"]
+mod runtime;
 #[path = "../shared/mod.rs"]
 mod shared;
 #[path = "../storage.rs"]
@@ -65,6 +75,13 @@ mod workspace_settings;
 // Provide feature-style module paths for shared cores when compiled in the daemon.
 mod codex {
     pub(crate) type WorkspaceSession = crate::backend::app_server::WorkspaceSession;
+    pub(crate) async fn ensure_codex_session(
+        _workspace_id: &str,
+        _state: &crate::state::AppState,
+        _app: &tauri::AppHandle,
+    ) -> Result<(), String> {
+        Err("runtime control commands are unavailable in daemon mode".to_string())
+    }
     pub(crate) mod args {
         pub(crate) use crate::codex_args::*;
     }
@@ -2509,6 +2526,11 @@ async fn handle_rpc_request(
             let workspace_id = parse_string(&params, "workspaceId")?;
             let session_id = parse_string(&params, "sessionId")?;
             state.delete_codex_session(workspace_id, session_id).await
+        }
+        "delete_codex_sessions" => {
+            let workspace_id = parse_string(&params, "workspaceId")?;
+            let session_ids = parse_string_array(&params, "sessionIds")?;
+            state.delete_codex_sessions(workspace_id, session_ids).await
         }
         "send_user_message" => {
             let workspace_id = parse_string(&params, "workspaceId")?;

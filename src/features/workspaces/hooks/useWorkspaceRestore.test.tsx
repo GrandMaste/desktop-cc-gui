@@ -42,6 +42,7 @@ describe("useWorkspaceRestore", () => {
         workspaces: [visibleWorkspace, collapsedWorkspace, activeWorkspace],
         hasLoaded: true,
         activeWorkspaceId: activeWorkspace.id,
+        restoreThreadsOnlyOnLaunch: false,
         connectWorkspace,
         listThreadsForWorkspace,
       }),
@@ -56,5 +57,88 @@ describe("useWorkspaceRestore", () => {
     expect(
       listThreadsForWorkspace.mock.calls.map((call) => call[0].id),
     ).toEqual(["ws-active", "ws-visible"]);
+  });
+
+  it("开启线程恢复模式时不会在启动阶段批量连接 runtime", async () => {
+    const activeWorkspace = createWorkspace({
+      id: "ws-active",
+      connected: false,
+    });
+    const visibleWorkspace = createWorkspace({
+      id: "ws-visible",
+      connected: false,
+    });
+    const connectWorkspace = vi.fn().mockResolvedValue(undefined);
+    const listThreadsForWorkspace = vi.fn().mockResolvedValue(undefined);
+
+    renderHook(() =>
+      useWorkspaceRestore({
+        workspaces: [visibleWorkspace, activeWorkspace],
+        hasLoaded: true,
+        activeWorkspaceId: activeWorkspace.id,
+        restoreThreadsOnlyOnLaunch: true,
+        connectWorkspace,
+        listThreadsForWorkspace,
+      }),
+    );
+
+    await waitFor(() => {
+      expect(listThreadsForWorkspace).toHaveBeenCalledTimes(2);
+    });
+
+    expect(connectWorkspace).not.toHaveBeenCalled();
+  });
+
+  it("active workspace 恢复失败时不会阻断其他工作区，并且后续 render 会重试失败项", async () => {
+    const activeWorkspace = createWorkspace({
+      id: "ws-active",
+      connected: false,
+    });
+    const visibleWorkspace = createWorkspace({
+      id: "ws-visible",
+      connected: true,
+    });
+    const connectWorkspace = vi.fn()
+      .mockRejectedValueOnce(new Error("connect failed"))
+      .mockResolvedValue(undefined);
+    const listThreadsForWorkspace = vi.fn().mockResolvedValue(undefined);
+
+    const { rerender } = renderHook(
+      (props: {
+        workspaces: WorkspaceInfo[];
+        activeWorkspaceId: string | null;
+      }) =>
+        useWorkspaceRestore({
+          workspaces: props.workspaces,
+          hasLoaded: true,
+          activeWorkspaceId: props.activeWorkspaceId,
+          restoreThreadsOnlyOnLaunch: false,
+          connectWorkspace,
+          listThreadsForWorkspace,
+        }),
+      {
+        initialProps: {
+          workspaces: [visibleWorkspace, activeWorkspace],
+          activeWorkspaceId: activeWorkspace.id,
+        },
+      },
+    );
+
+    await waitFor(() => {
+      expect(listThreadsForWorkspace).toHaveBeenCalledWith(visibleWorkspace);
+    });
+    expect(listThreadsForWorkspace).toHaveBeenCalledTimes(1);
+    expect(connectWorkspace).toHaveBeenCalledTimes(1);
+
+    rerender({
+      workspaces: [visibleWorkspace, activeWorkspace],
+      activeWorkspaceId: activeWorkspace.id,
+    });
+
+    await waitFor(() => {
+      expect(listThreadsForWorkspace).toHaveBeenCalledWith(activeWorkspace);
+    });
+    expect(connectWorkspace).toHaveBeenCalledTimes(2);
+    expect(listThreadsForWorkspace).toHaveBeenCalledTimes(2);
   });
 });

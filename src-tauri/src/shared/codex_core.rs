@@ -471,6 +471,21 @@ pub(crate) async fn archive_thread_core(
     Ok(response)
 }
 
+pub(crate) async fn archive_thread_best_effort_core(
+    sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
+    workspace_id: String,
+    thread_id: String,
+    timeout_duration: Duration,
+) -> Result<Value, String> {
+    let session = get_session_clone(sessions, &workspace_id).await?;
+    let params = json!({ "threadId": thread_id.clone() });
+    let response = session
+        .send_request_with_timeout("thread/archive", params, timeout_duration)
+        .await?;
+    session.clear_thread_effective_mode(&thread_id).await;
+    Ok(response)
+}
+
 pub(crate) async fn send_user_message_core(
     sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
     workspace_id: String,

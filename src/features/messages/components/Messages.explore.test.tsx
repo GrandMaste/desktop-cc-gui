@@ -266,6 +266,55 @@ describe("Messages explore rows", () => {
     expect(container.textContent ?? "").toContain("Read routes.ts");
   });
 
+  it("hides only exploring cards in claude canvas while keeping explored cards", async () => {
+    const items: ConversationItem[] = [
+      {
+        id: "explore-hidden-claude",
+        kind: "explore",
+        status: "exploring",
+        entries: [{ kind: "search", label: "Search reducers.ts" }],
+      },
+      {
+        id: "explore-keep-claude",
+        kind: "explore",
+        status: "explored",
+        entries: [{ kind: "read", label: "Read reducers.ts" }],
+      },
+      {
+        id: "tool-edit-visible-claude",
+        kind: "tool",
+        toolType: "edit",
+        title: "Tool: edit",
+        detail: JSON.stringify({
+          file_path: "src/reducers.ts",
+          old_string: "before",
+          new_string: "after",
+        }),
+        status: "completed",
+      },
+    ];
+
+    const { container } = render(
+      <Messages
+        items={items}
+        threadId="thread-1"
+        workspaceId="ws-1"
+        isThinking={false}
+        activeEngine="claude"
+        openTargets={[]}
+        selectedOpenAppId=""
+      />,
+    );
+
+    await waitFor(() => {
+      expect(container.textContent ?? "").toContain("reducers.ts");
+    });
+    const exploreRows = container.querySelectorAll(".explore-inline");
+    expect(exploreRows.length).toBe(1);
+    expect(container.textContent ?? "").not.toContain("Search reducers.ts");
+    expect(container.textContent ?? "").toContain("Read reducers.ts");
+  });
+
   it("does not merge explore items across interleaved tools", async () => {
     const items: ConversationItem[] = [
       {

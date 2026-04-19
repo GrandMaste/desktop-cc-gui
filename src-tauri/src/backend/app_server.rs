@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::env;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -15,6 +15,7 @@ use crate::backend::events::{AppServerEvent, EventSink};
 use crate::codex::args::{apply_codex_args, parse_codex_args};
 use crate::codex::collaboration_policy::strict_local_collaboration_profile_enabled;
 use crate::codex::thread_mode_state::ThreadModeState;
+use crate::runtime::RuntimeManager;
 use crate::types::WorkspaceEntry;
 
 #[path = "app_server_event_helpers.rs"]
@@ -1023,6 +1024,8 @@ pub(crate) struct WorkspaceSession {
     pub(crate) entry: WorkspaceEntry,
     pub(crate) child: Mutex<Child>,
     pub(crate) stdin: Mutex<ChildStdin>,
+    pub(crate) wrapper_kind: String,
+    pub(crate) resolved_bin: String,
     pub(crate) pending: Mutex<HashMap<u64, oneshot::Sender<Value>>>,
     timed_out_requests: Mutex<HashMap<u64, TimedOutRequest>>,
     pub(crate) next_id: AtomicU64,
@@ -1035,9 +1038,23 @@ pub(crate) struct WorkspaceSession {
     auto_compaction_state: Mutex<HashMap<String, AutoCompactionThreadState>>,
     local_user_input_requests: Mutex<HashMap<String, String>>,
     local_request_seq: AtomicU64,
+    runtime_manager: StdMutex<Option<Arc<RuntimeManager>>>,
 }
 
 impl WorkspaceSession {
+    fn configure_spawn_command(cmd: &mut tokio::process::Command) {
+        #[cfg(unix)]
+        unsafe {
+            cmd.pre_exec(|| {
+                if libc::setpgid(0, 0) == 0 {
+                    Ok(())
+                } else {
+                    Err(std::io::Error::last_os_error())
+                }
+            });
+        }
+    }
+
     async fn record_timed_out_request(&self, id: u64, method: &str, thread_id: Option<String>) {
         let now = now_millis();
         let mut timed_out_requests = self.timed_out_requests.lock().await;
@@ -1073,6 +1090,12 @@ impl WorkspaceSession {
             .map_err(|e| e.to_string())
     }
 
+    pub(crate) async fn probe_health(&self, timeout_duration: Duration) -> Result<(), String> {
+        self.send_request_with_timeout("model/list", json!({}), timeout_duration)
+            .await
+            .map(|_| ())
+    }
+
     pub(crate) async fn send_request(&self, method: &str, params: Value) -> Result<Value, String> {
         self.send_request_with_timeout(
             method,
@@ -1091,8 +1114,13 @@ impl WorkspaceSession {
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
         let (tx, rx) = oneshot::channel();
         self.pending.lock().await.insert(id, tx);
-        self.write_message(json!({ "id": id, "method": method, "params": params }))
-            .await?;
+        if let Err(error) = self
+            .write_message(json!({ "id": id, "method": method, "params": params }))
+            .await
+        {
+            self.pending.lock().await.remove(&id);
+            return Err(error);
+        }
         // Add timeout to prevent pending entries from leaking forever
         // when the child process crashes without sending a response.
         match timeout(timeout_duration, rx).await {
@@ -1112,6 +1140,20 @@ impl WorkspaceSession {
 
     pub(crate) fn initial_turn_start_timeout(&self) -> Duration {
         Duration::from_millis(resolve_initial_turn_start_timeout_ms())
+    }
+
+    pub(crate) fn attach_runtime_manager(&self, runtime_manager: Arc<RuntimeManager>) {
+        *self
+            .runtime_manager
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(runtime_manager);
+    }
+
+    fn runtime_manager(&self) -> Option<Arc<RuntimeManager>> {
+        self.runtime_manager
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
     }
 
     pub(crate) async fn send_notification(
@@ -1737,6 +1779,7 @@ async fn spawn_workspace_session_once<E: EventSink>(
     hide_console: bool,
 ) -> Result<Arc<WorkspaceSession>, String> {
     let mut command = build_codex_command_from_launch_context(launch_context, hide_console);
+    WorkspaceSession::configure_spawn_command(&mut command);
     let skip_spec_hint_injection = codex_args_override_instructions(codex_args.as_deref());
     apply_codex_args(&mut command, codex_args.as_deref())?;
     if !skip_spec_hint_injection {
@@ -1761,6 +1804,8 @@ async fn spawn_workspace_session_once<E: EventSink>(
         entry: entry.clone(),
         child: Mutex::new(child),
         stdin: Mutex::new(stdin),
+        wrapper_kind: launch_context.wrapper_kind.to_string(),
+        resolved_bin: launch_context.resolved_bin.clone(),
         pending: Mutex::new(HashMap::new()),
         timed_out_requests: Mutex::new(HashMap::new()),
         next_id: AtomicU64::new(1),
@@ -1772,6 +1817,7 @@ async fn spawn_workspace_session_once<E: EventSink>(
         auto_compaction_state: Mutex::new(HashMap::new()),
         local_user_input_requests: Mutex::new(HashMap::new()),
         local_request_seq: AtomicU64::new(1),
+        runtime_manager: StdMutex::new(None),
     });
 
     let session_clone = Arc::clone(&session);
@@ -1810,6 +1856,11 @@ async fn spawn_workspace_session_once<E: EventSink>(
                 value = blocked_event;
             }
             session_clone.track_plan_turn_state(&value).await;
+            if let Some(runtime_manager) = session_clone.runtime_manager() {
+                runtime_manager
+                    .handle_codex_runtime_event(&session_clone.entry, &value)
+                    .await;
+            }
             let synthetic_plan_event = session_clone
                 .maybe_emit_plan_blocker_user_input(&value)
                 .await;

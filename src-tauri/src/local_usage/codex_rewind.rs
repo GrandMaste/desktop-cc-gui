@@ -123,7 +123,7 @@ fn commit_codex_rewind(
     target_user_message_id: Option<&str>,
     local_user_message_count: Option<usize>,
 ) -> Result<CodexRewindCommitResult, String> {
-    let source_files = super::collect_matching_codex_session_files(
+    let source_files = super::session_delete::collect_matching_codex_session_files(
         source_session_id,
         workspace_path,
         sessions_roots,
@@ -288,10 +288,12 @@ fn collect_optional_codex_session_files(
 
     let mut matched_targets = Vec::new();
     for path in files {
-        if !super::codex_session_file_matches_session_id(&path, session_id)? {
+        if !super::session_delete::codex_session_file_matches_session_id(&path, session_id)? {
             continue;
         }
-        if super::codex_session_file_matches_workspace(&path, workspace_path)? == Some(true) {
+        if super::session_delete::codex_session_file_matches_workspace(&path, workspace_path)?
+            == Some(true)
+        {
             matched_targets.push(path);
         }
     }

@@ -21,6 +21,11 @@ use crate::types::{
 #[path = "local_usage/codex_rewind.rs"]
 mod codex_rewind;
 pub(crate) use codex_rewind::commit_codex_rewind_for_workspace;
+#[path = "local_usage/session_delete.rs"]
+mod session_delete;
+pub(crate) use session_delete::{
+    delete_codex_session_for_workspace, delete_codex_sessions_for_workspace,
+};
 
 #[derive(Default, Clone, Copy)]
 struct DailyTotals {
@@ -246,98 +251,16 @@ pub(crate) async fn load_codex_session(
     }))
 }
 
-pub(crate) async fn delete_codex_session_for_workspace(
-    workspaces: &Mutex<HashMap<String, WorkspaceEntry>>,
-    workspace_id: &str,
-    session_id: &str,
-) -> Result<usize, String> {
-    let workspace_id = workspace_id.trim();
-    let session_id = session_id.trim();
-    if workspace_id.is_empty() {
-        return Err("workspace_id is required".to_string());
-    }
-    if session_id.is_empty() {
-        return Err("session_id is required".to_string());
-    }
-    if session_id.contains('/') || session_id.contains('\\') || session_id.contains("..") {
-        return Err("invalid session_id".to_string());
-    }
-
-    let (workspace_path, sessions_roots) = {
-        let workspaces = workspaces.lock().await;
-        let entry = workspaces
-            .get(workspace_id)
-            .ok_or_else(|| "workspace not found".to_string())?;
-        let workspace_path = PathBuf::from(&entry.path);
-        let sessions_roots = resolve_sessions_roots(&workspaces, Some(workspace_path.as_path()));
-        (workspace_path, sessions_roots)
-    };
-
-    let session_id_for_delete = session_id.to_string();
-    tokio::task::spawn_blocking(move || {
-        delete_codex_session_files(
-            session_id_for_delete.as_str(),
-            workspace_path.as_path(),
-            &sessions_roots,
-        )
-    })
-    .await
-    .map_err(|err| err.to_string())?
-}
-
-fn collect_matching_codex_session_files(
-    session_id: &str,
-    workspace_path: &Path,
-    sessions_roots: &[PathBuf],
-) -> Result<Vec<PathBuf>, String> {
-    let mut files = Vec::new();
-    let mut seen = HashSet::new();
-    for root in sessions_roots {
-        collect_jsonl_files(root, &mut files, &mut seen);
-    }
-
-    let mut matched_targets = Vec::new();
-    let mut unknown_candidates = Vec::new();
-    for path in files {
-        if !codex_session_file_matches_session_id(&path, session_id)? {
-            continue;
-        }
-        match codex_session_file_matches_workspace(&path, workspace_path)? {
-            Some(true) => matched_targets.push(path),
-            Some(false) => continue,
-            None => unknown_candidates.push(path),
-        }
-    }
-
-    if matched_targets.is_empty() {
-        match unknown_candidates.len() {
-            0 => {}
-            1 => matched_targets = unknown_candidates,
-            count => {
-                return Err(format!(
-                    "ambiguous codex session files for session {}: {} candidates missing workspace metadata",
-                    session_id, count
-                ));
-            }
-        }
-    }
-
-    if matched_targets.is_empty() {
-        return Err(format!(
-            "codex session file not found for session {}",
-            session_id
-        ));
-    }
-
-    Ok(matched_targets)
-}
-
 fn find_codex_session_file(
     session_id: &str,
     workspace_path: &Path,
     sessions_roots: &[PathBuf],
 ) -> Result<PathBuf, String> {
-    let matches = collect_matching_codex_session_files(session_id, workspace_path, sessions_roots)?;
+    let matches = session_delete::collect_matching_codex_session_files(
+        session_id,
+        workspace_path,
+        sessions_roots,
+    )?;
     matches
         .into_iter()
         .next()
@@ -374,118 +297,6 @@ fn load_codex_session_entries(
         entries.push(value);
     }
     Ok(entries)
-}
-
-fn delete_codex_session_files(
-    session_id: &str,
-    workspace_path: &Path,
-    sessions_roots: &[PathBuf],
-) -> Result<usize, String> {
-    let matched_targets =
-        collect_matching_codex_session_files(session_id, workspace_path, sessions_roots)?;
-    let mut deleted_count = 0;
-    for path in matched_targets {
-        fs::remove_file(&path).map_err(|err| {
-            format!(
-                "failed to delete codex session file {}: {}",
-                path.display(),
-                err
-            )
-        })?;
-        deleted_count += 1;
-    }
-    Ok(deleted_count)
-}
-
-fn codex_session_file_matches_session_id(path: &Path, session_id: &str) -> Result<bool, String> {
-    let normalized_session_id = session_id.trim();
-    if normalized_session_id.is_empty() {
-        return Ok(false);
-    }
-
-    let file_stem = path
-        .file_stem()
-        .and_then(|value| value.to_str())
-        .unwrap_or_default()
-        .trim();
-    if file_stem == normalized_session_id
-        || file_stem.ends_with(&format!("-{normalized_session_id}"))
-    {
-        return Ok(true);
-    }
-
-    let file = File::open(path).map_err(|err| {
-        format!(
-            "failed to open codex session file {}: {}",
-            path.display(),
-            err
-        )
-    })?;
-    let reader = BufReader::new(file);
-    for line in reader.lines() {
-        let line = line.map_err(|err| err.to_string())?;
-        if line.trim().is_empty() {
-            continue;
-        }
-        let value: Value = match serde_json::from_str(&line) {
-            Ok(value) => value,
-            Err(_) => continue,
-        };
-        let entry_type = value
-            .get("type")
-            .and_then(|value| value.as_str())
-            .unwrap_or("");
-        if entry_type != "session_meta" {
-            continue;
-        }
-        let payload = value.get("payload").and_then(|value| value.as_object());
-        let payload_id = payload
-            .and_then(|payload| payload.get("id"))
-            .and_then(|value| value.as_str())
-            .unwrap_or("")
-            .trim();
-        return Ok(payload_id == normalized_session_id);
-    }
-
-    Ok(false)
-}
-
-fn codex_session_file_matches_workspace(
-    path: &Path,
-    workspace_path: &Path,
-) -> Result<Option<bool>, String> {
-    let file = File::open(path).map_err(|err| {
-        format!(
-            "failed to open codex session file {}: {}",
-            path.display(),
-            err
-        )
-    })?;
-    let reader = BufReader::new(file);
-
-    for line in reader.lines() {
-        let line = line.map_err(|err| err.to_string())?;
-        if line.trim().is_empty() {
-            continue;
-        }
-        let value: Value = match serde_json::from_str(&line) {
-            Ok(value) => value,
-            Err(_) => continue,
-        };
-        let entry_type = value
-            .get("type")
-            .and_then(|value| value.as_str())
-            .unwrap_or("");
-        if entry_type != "session_meta" && entry_type != "turn_context" {
-            continue;
-        }
-        let Some(cwd) = extract_cwd(&value) else {
-            continue;
-        };
-        return Ok(Some(path_matches_workspace(&cwd, workspace_path)));
-    }
-
-    Ok(None)
 }
 
 fn scan_local_usage_statistics(
@@ -2557,9 +2368,37 @@ fn day_key_for_timestamp_ms(timestamp_ms: i64) -> Option<String> {
 fn extract_cwd(value: &Value) -> Option<String> {
     let root = value.as_object()?;
     let payload = root.get("payload").and_then(Value::as_object);
-    let session_meta = payload
-        .and_then(|payload| payload.get("session_meta"))
+    let session_meta = root
+        .get("session_meta")
         .and_then(Value::as_object)
+        .or_else(|| root.get("sessionMeta").and_then(Value::as_object))
+        .or_else(|| {
+            payload
+                .and_then(|payload| payload.get("context"))
+                .and_then(Value::as_object)
+        })
+        .and_then(|context| {
+            context
+                .get("session_meta")
+                .and_then(Value::as_object)
+                .or_else(|| context.get("sessionMeta").and_then(Value::as_object))
+                .or_else(|| Some(context))
+        })
+        .or_else(|| {
+            payload
+                .and_then(|payload| payload.get("turnContext"))
+                .and_then(Value::as_object)
+        })
+        .or_else(|| {
+            payload
+                .and_then(|payload| payload.get("turn_context"))
+                .and_then(Value::as_object)
+        })
+        .or_else(|| {
+            payload
+                .and_then(|payload| payload.get("session_meta"))
+                .and_then(Value::as_object)
+        })
         .or_else(|| {
             payload
                 .and_then(|payload| payload.get("sessionMeta"))
@@ -2568,6 +2407,24 @@ fn extract_cwd(value: &Value) -> Option<String> {
 
     read_string_from_object(root, &["cwd"])
         .or_else(|| payload.and_then(|item| read_string_from_object(item, &["cwd"])))
+        .or_else(|| {
+            payload
+                .and_then(|item| item.get("context"))
+                .and_then(Value::as_object)
+                .and_then(|item| read_string_from_object(item, &["cwd"]))
+        })
+        .or_else(|| {
+            payload
+                .and_then(|item| item.get("turnContext"))
+                .and_then(Value::as_object)
+                .and_then(|item| read_string_from_object(item, &["cwd"]))
+        })
+        .or_else(|| {
+            payload
+                .and_then(|item| item.get("turn_context"))
+                .and_then(Value::as_object)
+                .and_then(|item| read_string_from_object(item, &["cwd"]))
+        })
         .or_else(|| session_meta.and_then(|item| read_string_from_object(item, &["cwd"])))
 }
 

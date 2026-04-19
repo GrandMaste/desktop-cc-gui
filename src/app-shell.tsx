@@ -1055,6 +1055,7 @@ export function AppShell() {
     lastAgentMessageByThread,
     interruptTurn,
     removeThread,
+    removeThreads,
     pinThread,
     unpinThread,
     isThreadPinned,
@@ -1369,7 +1370,10 @@ export function AppShell() {
   }, [activeWorkspaceId, ensureWorkspaceThreadListLoaded]);
   const handleEnsureWorkspaceThreadsForSettings = useCallback(
     (workspaceId: string) => {
-      ensureWorkspaceThreadListLoaded(workspaceId, { preserveState: true });
+      ensureWorkspaceThreadListLoaded(workspaceId, {
+        preserveState: false,
+        force: true,
+      });
     },
     [ensureWorkspaceThreadListLoaded],
   );
@@ -2594,6 +2598,8 @@ export function AppShell() {
     hasLoaded,
     connectWorkspace,
     activeWorkspaceId,
+    restoreThreadsOnlyOnLaunch:
+      appSettings.runtimeRestoreThreadsOnlyOnLaunch !== false,
     listThreadsForWorkspace: listThreadsForWorkspaceTracked,
   });
   useWorkspaceRefreshOnFocus({
@@ -2831,7 +2837,7 @@ export function AppShell() {
     previousDurationMs, previousTracker, prompts, pushError, pushLoading, queueGitStatusRefresh, queueMessage,
     queueSaveSettings, rafId, rateLimitsByWorkspace, reasoningOptions, reasoningSupported, recentThreads, reduceTransparency, refreshAccountInfo,
     refreshAccountRateLimits, refreshFiles, refreshGitDiffs, refreshGitLog, refreshGitStatus, refreshThread, refreshWorkspaces, releaseNotesActiveIndex,
-    releaseNotesEntries, releaseNotesError, releaseNotesLoading, releaseNotesOpen, reloadSelectedAgent, removeImage, removeImagesForThread, removeThread,
+    releaseNotesEntries, releaseNotesError, releaseNotesLoading, releaseNotesOpen, reloadSelectedAgent, removeImage, removeImagesForThread, removeThread, removeThreads,
     removeWorkspace, removeWorktree, renamePrompt, renameThread, renameWorkspaceGroup, renameWorktree, renameWorktreeNotice, renameWorktreePrompt,
     renameWorktreeUpstream, renameWorktreeUpstreamPrompt, requestId, requestThreadId, resetGitHubPanelState, resetSoloSplitToHalf, resetWorkspaceThreads, resolveCloneProjectContext,
     resolveCanonicalThreadId, resolveCollaborationRuntimeMode, resolveCollaborationUiMode, resolveOpenCodeAgentForThread, resolveOpenCodeVariantForThread, resolvedEffort, resolvedModel, response, restartTerminalSession,

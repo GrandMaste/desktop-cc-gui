@@ -62,6 +62,7 @@ fn sync_codex_config_flags(settings: &AppSettings) {
 
 pub(crate) async fn get_app_settings_core(app_settings: &Mutex<AppSettings>) -> AppSettings {
     let mut settings = app_settings.lock().await.clone();
+    settings.sanitize_runtime_pool_settings();
     if let Ok(Some(collab_enabled)) = codex_config::read_collab_enabled() {
         settings.experimental_collab_enabled = collab_enabled;
     }
@@ -91,6 +92,7 @@ pub(crate) async fn update_app_settings_core(
     settings_path: &PathBuf,
 ) -> Result<AppSettings, String> {
     let mut normalized = settings;
+    normalized.sanitize_runtime_pool_settings();
     normalized.canvas_width_mode = sanitize_canvas_width_mode(&normalized.canvas_width_mode);
     normalized.layout_mode = sanitize_layout_mode(&normalized.layout_mode);
     validate_ui_scale(normalized.ui_scale)?;
@@ -122,6 +124,7 @@ pub(crate) async fn restart_codex_sessions_for_app_settings_change_core<F, Fut>(
         std::collections::HashMap<String, Arc<crate::backend::app_server::WorkspaceSession>>,
     >,
     app_settings: &Mutex<AppSettings>,
+    runtime_manager: Option<&Arc<crate::runtime::RuntimeManager>>,
     spawn_session: F,
 ) -> Result<(), String>
 where
@@ -135,6 +138,7 @@ where
         workspaces,
         sessions,
         app_settings,
+        runtime_manager,
         spawn_session,
     )
     .await

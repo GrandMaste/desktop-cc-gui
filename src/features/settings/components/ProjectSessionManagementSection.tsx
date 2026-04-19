@@ -600,12 +600,18 @@ export function ProjectSessionManagementSection({
             <div className="settings-project-sessions-empty">
               {t("settings.projectSessionWorkspaceRequired")}
             </div>
-          ) : loading ? (
+          ) : loading && orderedThreads.length === 0 ? (
             <div className="settings-project-sessions-empty">{t("settings.projectSessionLoading")}</div>
           ) : orderedThreads.length === 0 ? (
             <div className="settings-project-sessions-empty">{t("settings.projectSessionEmpty")}</div>
           ) : (
-            <ul className="settings-project-sessions-list">
+            <>
+              {loading ? (
+                <div className="settings-project-sessions-notice" role="status">
+                  {t("settings.projectSessionLoading")}
+                </div>
+              ) : null}
+              <ul className="settings-project-sessions-list">
               {orderedThreads.map((thread) => {
                 const selected = Boolean(selectedIds[thread.id]);
                 const engineType = resolveEngineType(thread.engineSource);
@@ -634,7 +640,8 @@ export function ProjectSessionManagementSection({
                   </li>
                 );
               })}
-            </ul>
+              </ul>
+            </>
           )}
         </>
       )}

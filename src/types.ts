@@ -242,11 +242,107 @@ export type AppSettings = {
   workspaceGroups: WorkspaceGroup[];
   openAppTargets: OpenAppTarget[];
   selectedOpenAppId: string;
+  runtimeRestoreThreadsOnlyOnLaunch: boolean;
+  runtimeForceCleanupOnExit: boolean;
+  runtimeOrphanSweepOnLaunch: boolean;
+  codexMaxHotRuntimes: number;
+  codexMaxWarmRuntimes: number;
+  codexWarmTtlSeconds: number;
   streamingEnabled?: boolean;
   autoOpenFileEnabled?: boolean;
   diffExpandedByDefault?: boolean;
   commitPrompt?: string;
   sendShortcut?: "enter" | "cmdEnter";
+};
+
+export type RuntimePoolState =
+  | "starting"
+  | "acquired"
+  | "streaming"
+  | "graceful-idle"
+  | "evictable"
+  | "stopping"
+  | "failed"
+  | "zombie-suspected";
+
+export type RuntimeProcessDiagnostics = {
+  rootProcesses: number;
+  totalProcesses: number;
+  nodeProcesses: number;
+  rootCommand: string | null;
+  managedRuntimeProcesses: number;
+  resumeHelperProcesses: number;
+  orphanResidueProcesses: number;
+};
+
+export type RuntimePoolRow = {
+  workspaceId: string;
+  workspaceName: string;
+  workspacePath: string;
+  engine: string;
+  state: RuntimePoolState;
+  pid: number | null;
+  wrapperKind: string | null;
+  resolvedBin: string | null;
+  startedAtMs: number | null;
+  lastUsedAtMs: number;
+  pinned: boolean;
+  turnLeaseCount: number;
+  streamLeaseCount: number;
+  leaseSources: string[];
+  evictCandidate: boolean;
+  evictionReason: string | null;
+  error: string | null;
+  processDiagnostics?: RuntimeProcessDiagnostics | null;
+};
+
+export type RuntimeEngineObservability = {
+  engine: string;
+  sessionCount: number;
+  trackedRootProcesses: number;
+  trackedTotalProcesses: number;
+  trackedNodeProcesses: number;
+  hostManagedRootProcesses: number;
+  hostUnmanagedRootProcesses: number;
+  externalRootProcesses: number;
+  hostUnmanagedTotalProcesses: number;
+  externalTotalProcesses: number;
+};
+
+export type RuntimePoolSnapshot = {
+  rows: RuntimePoolRow[];
+  summary: {
+    totalRuntimes: number;
+    acquiredRuntimes: number;
+    streamingRuntimes: number;
+    gracefulIdleRuntimes: number;
+    evictableRuntimes: number;
+    pinnedRuntimes: number;
+    codexRuntimes: number;
+    claudeRuntimes: number;
+  };
+  budgets: {
+    maxHotCodex: number;
+    maxWarmCodex: number;
+    warmTtlSeconds: number;
+    restoreThreadsOnlyOnLaunch: boolean;
+    forceCleanupOnExit: boolean;
+    orphanSweepOnLaunch: boolean;
+  };
+  diagnostics: {
+    orphanEntriesFound: number;
+    orphanEntriesCleaned: number;
+    orphanEntriesFailed: number;
+    forceKillCount: number;
+    leaseBlockedEvictionCount: number;
+    coordinatorAbortCount: number;
+    startupManagedNodeProcesses: number;
+    startupResumeHelperNodeProcesses: number;
+    startupOrphanResidueProcesses: number;
+    lastOrphanSweepAtMs: number | null;
+    lastShutdownAtMs: number | null;
+  };
+  engineObservability: RuntimeEngineObservability[];
 };
 
 export type CodexDoctorResult = {
@@ -779,6 +875,8 @@ export type MessageSendOptions = {
   effort?: string | null;
   collaborationMode?: Record<string, unknown> | null;
   accessMode?: AccessMode;
+  skipOptimisticUserBubble?: boolean;
+  suppressUserMessageRender?: boolean;
 };
 
 export type SelectedAgentOption = {

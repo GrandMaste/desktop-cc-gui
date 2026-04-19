@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import type { Dispatch, MutableRefObject } from "react";
 import type {
   AppServerEvent,
@@ -15,6 +15,97 @@ import { stripBackendErrorPrefix } from "../utils/networkErrors";
 import { captureClaudeMcpRuntimeSnapshotFromRaw } from "../utils/claudeMcpRuntimeSnapshot";
 import type { ThreadAction } from "./useThreadsReducer";
 import { isDebugLightPathEnabled } from "../utils/realtimePerfFlags";
+
+const TURN_STALL_WARNING_MS = 6_000;
+const TURN_DIAGNOSTIC_VERBOSE_FLAG_KEY = "ccgui.debug.turnDiagnosticsVerbose";
+const EXECUTION_ITEM_TYPES = new Set([
+  "commandExecution",
+  "fileChange",
+  "mcpToolCall",
+  "collabToolCall",
+  "collabAgentToolCall",
+  "webSearch",
+  "imageView",
+]);
+
+type ThreadLifecycleSnapshot = {
+  isProcessing: boolean;
+  activeTurnId: string | null;
+};
+
+type TurnDiagnosticState = {
+  workspaceId: string;
+  threadId: string;
+  turnId: string;
+  startedAt: number;
+  firstDeltaAt: number | null;
+  firstItemEventAt: number | null;
+  firstItemEventKind: "started" | "updated" | "completed" | null;
+  firstItemType: string | null;
+  firstExecutionAt: number | null;
+  firstExecutionEventKind: "started" | "updated" | "completed" | null;
+  firstExecutionItemType: string | null;
+  firstExecutionItemId: string | null;
+  completedAt: number | null;
+  errorAt: number | null;
+  deltaCount: number;
+  itemEventCount: number;
+  stallReported: boolean;
+};
+
+function asString(value: unknown) {
+  return typeof value === "string" ? value : value ? String(value) : "";
+}
+
+function createThreadLifecycleSnapshot(): ThreadLifecycleSnapshot {
+  return {
+    isProcessing: false,
+    activeTurnId: null,
+  };
+}
+
+function createTurnDiagnosticState(
+  workspaceId: string,
+  threadId: string,
+  turnId: string,
+  startedAt: number,
+): TurnDiagnosticState {
+  return {
+    workspaceId,
+    threadId,
+    turnId,
+    startedAt,
+    firstDeltaAt: null,
+    firstItemEventAt: null,
+    firstItemEventKind: null,
+    firstItemType: null,
+    firstExecutionAt: null,
+    firstExecutionEventKind: null,
+    firstExecutionItemType: null,
+    firstExecutionItemId: null,
+    completedAt: null,
+    errorAt: null,
+    deltaCount: 0,
+    itemEventCount: 0,
+    stallReported: false,
+  };
+}
+
+function isTurnDiagnosticVerboseEnabled() {
+  if (typeof window === "undefined") {
+    return false;
+  }
+  try {
+    const value = window.localStorage.getItem(TURN_DIAGNOSTIC_VERBOSE_FLAG_KEY);
+    if (!value) {
+      return false;
+    }
+    const normalized = value.trim().toLowerCase();
+    return normalized === "1" || normalized === "true" || normalized === "on";
+  } catch {
+    return false;
+  }
+}
 
 type ThreadEventHandlersOptions = {
   activeThreadId: string | null;
@@ -148,6 +239,172 @@ export function useThreadEventHandlers({
   onCollaborationModeResolved,
   onExitPlanModeToolCompleted,
 }: ThreadEventHandlersOptions) {
+  const threadLifecycleSnapshotRef = useRef<Map<string, ThreadLifecycleSnapshot>>(new Map());
+  const turnDiagnosticsRef = useRef<Map<string, TurnDiagnosticState>>(new Map());
+  const turnStallTimerRef = useRef<Map<string, number>>(new Map());
+
+  const getThreadLifecycleSnapshot = useCallback((threadId: string) => {
+    return (
+      threadLifecycleSnapshotRef.current.get(threadId) ?? createThreadLifecycleSnapshot()
+    );
+  }, []);
+
+  const emitTurnDiagnostic = useCallback(
+    (
+      label: string,
+      payload: Record<string, unknown>,
+      options?: { force?: boolean },
+    ) => {
+      if (!options?.force && !isTurnDiagnosticVerboseEnabled()) {
+        return;
+      }
+      onDebug?.({
+        id: `${Date.now()}-turn-diagnostic-${label}`,
+        timestamp: Date.now(),
+        source: "event",
+        label: `thread/session:turn-diagnostic:${label}`,
+        payload,
+      });
+    },
+    [onDebug],
+  );
+
+  const clearTurnStallTimer = useCallback((threadId: string) => {
+    const timerId = turnStallTimerRef.current.get(threadId);
+    if (timerId === undefined) {
+      return;
+    }
+    window.clearTimeout(timerId);
+    turnStallTimerRef.current.delete(threadId);
+  }, []);
+
+  const scheduleTurnStallTimer = useCallback(
+    (threadId: string) => {
+      if (typeof window === "undefined") {
+        return;
+      }
+      clearTurnStallTimer(threadId);
+      const timerId = window.setTimeout(() => {
+        const diagnostic = turnDiagnosticsRef.current.get(threadId);
+        if (!diagnostic || diagnostic.stallReported || diagnostic.firstExecutionAt !== null) {
+          return;
+        }
+        const lifecycle = getThreadLifecycleSnapshot(threadId);
+        const now = Date.now();
+        diagnostic.stallReported = true;
+        emitTurnDiagnostic("stalled-after-first-delta", {
+          workspaceId: diagnostic.workspaceId,
+          threadId: diagnostic.threadId,
+          turnId: diagnostic.turnId,
+          elapsedMs: Math.max(0, now - diagnostic.startedAt),
+          deltaSinceMs:
+            diagnostic.firstDeltaAt === null ? null : Math.max(0, now - diagnostic.firstDeltaAt),
+          itemEventCount: diagnostic.itemEventCount,
+          firstItemEventKind: diagnostic.firstItemEventKind,
+          firstItemType: diagnostic.firstItemType,
+          hasExecutionItem: false,
+          isProcessing: lifecycle.isProcessing,
+          activeTurnId: lifecycle.activeTurnId,
+        }, { force: true });
+      }, TURN_STALL_WARNING_MS);
+      turnStallTimerRef.current.set(threadId, timerId);
+    },
+    [clearTurnStallTimer, emitTurnDiagnostic, getThreadLifecycleSnapshot],
+  );
+
+  const markProcessingTracked = useCallback(
+    (threadId: string, isProcessing: boolean) => {
+      const previous =
+        threadLifecycleSnapshotRef.current.get(threadId) ?? createThreadLifecycleSnapshot();
+      threadLifecycleSnapshotRef.current.set(threadId, {
+        ...previous,
+        isProcessing,
+      });
+      markProcessing(threadId, isProcessing);
+    },
+    [markProcessing],
+  );
+
+  const setActiveTurnIdTracked = useCallback(
+    (threadId: string, turnId: string | null) => {
+      const previous =
+        threadLifecycleSnapshotRef.current.get(threadId) ?? createThreadLifecycleSnapshot();
+      threadLifecycleSnapshotRef.current.set(threadId, {
+        ...previous,
+        activeTurnId: turnId,
+      });
+      setActiveTurnId(threadId, turnId);
+    },
+    [setActiveTurnId],
+  );
+
+  const captureTurnItemDiagnostic = useCallback(
+    (
+      threadId: string,
+      kind: "started" | "updated" | "completed",
+      item: Record<string, unknown>,
+    ) => {
+      const diagnostic = turnDiagnosticsRef.current.get(threadId);
+      if (!diagnostic) {
+        return;
+      }
+      diagnostic.itemEventCount += 1;
+      const itemType = asString(item.type).trim() || null;
+      const itemId = asString(item.id).trim() || null;
+      const now = Date.now();
+      if (diagnostic.firstItemEventAt === null) {
+        diagnostic.firstItemEventAt = now;
+        diagnostic.firstItemEventKind = kind;
+        diagnostic.firstItemType = itemType;
+        const lifecycle = getThreadLifecycleSnapshot(threadId);
+        emitTurnDiagnostic("first-item", {
+          workspaceId: diagnostic.workspaceId,
+          threadId,
+          turnId: diagnostic.turnId,
+          itemEventKind: kind,
+          itemType,
+          itemId,
+          elapsedMs: Math.max(0, now - diagnostic.startedAt),
+          deltaSeen: diagnostic.firstDeltaAt !== null,
+          isProcessing: lifecycle.isProcessing,
+          activeTurnId: lifecycle.activeTurnId,
+        });
+      }
+      if (itemType && EXECUTION_ITEM_TYPES.has(itemType) && diagnostic.firstExecutionAt === null) {
+        diagnostic.firstExecutionAt = now;
+        diagnostic.firstExecutionEventKind = kind;
+        diagnostic.firstExecutionItemType = itemType;
+        diagnostic.firstExecutionItemId = itemId;
+        clearTurnStallTimer(threadId);
+        const lifecycle = getThreadLifecycleSnapshot(threadId);
+        emitTurnDiagnostic("first-execution-item", {
+          workspaceId: diagnostic.workspaceId,
+          threadId,
+          turnId: diagnostic.turnId,
+          itemEventKind: kind,
+          itemType,
+          itemId,
+          elapsedMs: Math.max(0, now - diagnostic.startedAt),
+          deltaSinceMs:
+            diagnostic.firstDeltaAt === null ? null : Math.max(0, now - diagnostic.firstDeltaAt),
+          isProcessing: lifecycle.isProcessing,
+          activeTurnId: lifecycle.activeTurnId,
+        });
+      }
+    },
+    [clearTurnStallTimer, emitTurnDiagnostic, getThreadLifecycleSnapshot],
+  );
+
+  useEffect(() => {
+    const timers = turnStallTimerRef.current;
+    return () => {
+      timers.forEach((timerId) => {
+        window.clearTimeout(timerId);
+      });
+      timers.clear();
+    };
+  }, []);
+
   const isReasoningRawDebugEnabled = () => {
     if (import.meta.env?.DEV) {
       try {
@@ -179,8 +436,8 @@ export function useThreadEventHandlers({
   const onApprovalRequest = useThreadApprovalEvents({
     dispatch,
     approvalAllowlistRef,
-    markProcessing,
-    setActiveTurnId,
+    markProcessing: markProcessingTracked,
+    setActiveTurnId: setActiveTurnIdTracked,
   });
   const enqueueUserInputRequest = useThreadUserInputEvents({ dispatch });
   const onRequestUserInput = useCallback(
@@ -192,15 +449,15 @@ export function useThreadEventHandlers({
       }
       // requestUserInput means the turn is now waiting for user choice,
       // so we should stop the spinning "processing" state immediately.
-      markProcessing(threadId, false);
-      setActiveTurnId(threadId, null);
+      markProcessingTracked(threadId, false);
+      setActiveTurnIdTracked(threadId, null);
       dispatch({
         type: "settleThreadPlanInProgress",
         threadId,
         targetStatus: "pending",
       });
     },
-    [dispatch, enqueueUserInputRequest, markProcessing, setActiveTurnId],
+    [dispatch, enqueueUserInputRequest, markProcessingTracked, setActiveTurnIdTracked],
   );
   const onModeBlocked = useCallback(
     (event: CollaborationModeBlockedRequest) => {
@@ -272,7 +529,7 @@ export function useThreadEventHandlers({
     dispatch,
     getCustomName,
     resolveCollaborationUiMode,
-    markProcessing,
+    markProcessing: markProcessingTracked,
     markReviewing,
     safeMessageActivity,
     recordThreadActivity,
@@ -301,9 +558,9 @@ export function useThreadEventHandlers({
     getCustomName,
     isAutoTitlePending,
     isThreadHidden,
-    markProcessing,
+    markProcessing: markProcessingTracked,
     markReviewing,
-    setActiveTurnId,
+    setActiveTurnId: setActiveTurnIdTracked,
     pendingInterruptsRef,
     interruptedThreadsRef,
     pushThreadErrorMessage,
@@ -337,6 +594,180 @@ export function useThreadEventHandlers({
       safeMessageActivity();
     },
     [dispatch, safeMessageActivity],
+  );
+
+  const onTurnStartedTracked = useCallback(
+    (workspaceId: string, threadId: string, turnId: string) => {
+      const startedAt = Date.now();
+      clearTurnStallTimer(threadId);
+      turnDiagnosticsRef.current.set(
+        threadId,
+        createTurnDiagnosticState(workspaceId, threadId, turnId, startedAt),
+      );
+      onTurnStarted(workspaceId, threadId, turnId);
+      const lifecycle = getThreadLifecycleSnapshot(threadId);
+      emitTurnDiagnostic("started", {
+        workspaceId,
+        threadId,
+        turnId,
+        isProcessing: lifecycle.isProcessing,
+        activeTurnId: lifecycle.activeTurnId,
+      });
+    },
+    [clearTurnStallTimer, emitTurnDiagnostic, getThreadLifecycleSnapshot, onTurnStarted],
+  );
+
+  const onAgentMessageDeltaTracked = useCallback(
+    (payload: {
+      workspaceId: string;
+      threadId: string;
+      itemId: string;
+      delta: string;
+    }) => {
+      onAgentMessageDelta(payload);
+      if (interruptedThreadsRef.current.has(payload.threadId)) {
+        return;
+      }
+      const diagnostic = turnDiagnosticsRef.current.get(payload.threadId);
+      if (!diagnostic) {
+        return;
+      }
+      diagnostic.deltaCount += 1;
+      if (diagnostic.firstDeltaAt !== null) {
+        return;
+      }
+      diagnostic.firstDeltaAt = Date.now();
+      scheduleTurnStallTimer(payload.threadId);
+      const lifecycle = getThreadLifecycleSnapshot(payload.threadId);
+      emitTurnDiagnostic("first-delta", {
+        workspaceId: payload.workspaceId,
+        threadId: payload.threadId,
+        turnId: diagnostic.turnId,
+        itemId: payload.itemId,
+        deltaLength: payload.delta.length,
+        elapsedMs: Math.max(0, diagnostic.firstDeltaAt - diagnostic.startedAt),
+        isProcessing: lifecycle.isProcessing,
+        activeTurnId: lifecycle.activeTurnId,
+      });
+    },
+    [
+      emitTurnDiagnostic,
+      getThreadLifecycleSnapshot,
+      interruptedThreadsRef,
+      onAgentMessageDelta,
+      scheduleTurnStallTimer,
+    ],
+  );
+
+  const onItemStartedTracked = useCallback(
+    (workspaceId: string, threadId: string, item: Record<string, unknown>) => {
+      onItemStarted(workspaceId, threadId, item);
+      captureTurnItemDiagnostic(threadId, "started", item);
+    },
+    [captureTurnItemDiagnostic, onItemStarted],
+  );
+
+  const onItemUpdatedTracked = useCallback(
+    (workspaceId: string, threadId: string, item: Record<string, unknown>) => {
+      onItemUpdated(workspaceId, threadId, item);
+      captureTurnItemDiagnostic(threadId, "updated", item);
+    },
+    [captureTurnItemDiagnostic, onItemUpdated],
+  );
+
+  const onItemCompletedTracked = useCallback(
+    (workspaceId: string, threadId: string, item: Record<string, unknown>) => {
+      onItemCompleted(workspaceId, threadId, item);
+      captureTurnItemDiagnostic(threadId, "completed", item);
+    },
+    [captureTurnItemDiagnostic, onItemCompleted],
+  );
+
+  const finalizeTurnDiagnostic = useCallback(
+    (
+      threadId: string,
+      finalState: "completed" | "error",
+      payload?: Record<string, unknown>,
+    ) => {
+      const diagnostic = turnDiagnosticsRef.current.get(threadId);
+      clearTurnStallTimer(threadId);
+      if (!diagnostic) {
+        return;
+      }
+      const now = Date.now();
+      if (finalState === "completed") {
+        diagnostic.completedAt = now;
+      } else {
+        diagnostic.errorAt = now;
+      }
+      const lifecycle = getThreadLifecycleSnapshot(threadId);
+      emitTurnDiagnostic(finalState, {
+        workspaceId: diagnostic.workspaceId,
+        threadId,
+        turnId: diagnostic.turnId,
+        elapsedMs: Math.max(0, now - diagnostic.startedAt),
+        firstDeltaAtMs:
+          diagnostic.firstDeltaAt === null
+            ? null
+            : Math.max(0, diagnostic.firstDeltaAt - diagnostic.startedAt),
+        firstItemAtMs:
+          diagnostic.firstItemEventAt === null
+            ? null
+            : Math.max(0, diagnostic.firstItemEventAt - diagnostic.startedAt),
+        firstItemEventKind: diagnostic.firstItemEventKind,
+        firstItemType: diagnostic.firstItemType,
+        firstExecutionAtMs:
+          diagnostic.firstExecutionAt === null
+            ? null
+            : Math.max(0, diagnostic.firstExecutionAt - diagnostic.startedAt),
+        firstExecutionEventKind: diagnostic.firstExecutionEventKind,
+        firstExecutionItemType: diagnostic.firstExecutionItemType,
+        firstExecutionItemId: diagnostic.firstExecutionItemId,
+        deltaCount: diagnostic.deltaCount,
+        itemEventCount: diagnostic.itemEventCount,
+        stalledAfterFirstDelta: diagnostic.stallReported,
+        isProcessing: lifecycle.isProcessing,
+        activeTurnId: lifecycle.activeTurnId,
+        ...payload,
+      }, { force: finalState === "error" || diagnostic.stallReported });
+      turnDiagnosticsRef.current.delete(threadId);
+    },
+    [clearTurnStallTimer, emitTurnDiagnostic, getThreadLifecycleSnapshot],
+  );
+
+  const onTurnCompletedTracked = useCallback(
+    (workspaceId: string, threadId: string, turnId: string) => {
+      onTurnCompleted(workspaceId, threadId, turnId);
+      const diagnostic = turnDiagnosticsRef.current.get(threadId);
+      if (diagnostic && diagnostic.turnId !== turnId) {
+        return;
+      }
+      finalizeTurnDiagnostic(threadId, "completed");
+    },
+    [finalizeTurnDiagnostic, onTurnCompleted],
+  );
+
+  const onTurnErrorTracked = useCallback(
+    (
+      workspaceId: string,
+      threadId: string,
+      turnId: string,
+      payload: { message: string; willRetry: boolean },
+    ) => {
+      onTurnError(workspaceId, threadId, turnId, payload);
+      if (payload.willRetry) {
+        return;
+      }
+      const diagnostic = turnDiagnosticsRef.current.get(threadId);
+      if (diagnostic && diagnostic.turnId !== turnId) {
+        return;
+      }
+      finalizeTurnDiagnostic(threadId, "error", {
+        message: payload.message,
+        willRetry: payload.willRetry,
+      });
+    },
+    [finalizeTurnDiagnostic, onTurnError],
   );
 
   const onAppServerEvent = useCallback(
@@ -486,11 +917,11 @@ export function useThreadEventHandlers({
       onModeResolved,
       onBackgroundThreadAction,
       onAppServerEvent,
-      onAgentMessageDelta,
+      onAgentMessageDelta: onAgentMessageDeltaTracked,
       onAgentMessageCompleted,
-      onItemStarted,
-      onItemUpdated,
-      onItemCompleted,
+      onItemStarted: onItemStartedTracked,
+      onItemUpdated: onItemUpdatedTracked,
+      onItemCompleted: onItemCompletedTracked,
       onReasoningSummaryDelta,
       onReasoningSummaryBoundary,
       onReasoningTextDelta,
@@ -498,13 +929,13 @@ export function useThreadEventHandlers({
       onTerminalInteraction,
       onFileChangeOutputDelta,
       onThreadStarted,
-      onTurnStarted,
-      onTurnCompleted,
+      onTurnStarted: onTurnStartedTracked,
+      onTurnCompleted: onTurnCompletedTracked,
       onProcessingHeartbeat,
       onTurnPlanUpdated,
       onThreadTokenUsageUpdated,
       onAccountRateLimitsUpdated,
-      onTurnError,
+      onTurnError: onTurnErrorTracked,
       onContextCompacting,
       onContextCompacted,
       onContextCompactionFailed,
@@ -518,11 +949,11 @@ export function useThreadEventHandlers({
       onModeResolved,
       onBackgroundThreadAction,
       onAppServerEvent,
-      onAgentMessageDelta,
+      onAgentMessageDeltaTracked,
       onAgentMessageCompleted,
-      onItemStarted,
-      onItemUpdated,
-      onItemCompleted,
+      onItemStartedTracked,
+      onItemUpdatedTracked,
+      onItemCompletedTracked,
       onReasoningSummaryDelta,
       onReasoningSummaryBoundary,
       onReasoningTextDelta,
@@ -530,18 +961,17 @@ export function useThreadEventHandlers({
       onTerminalInteraction,
       onFileChangeOutputDelta,
       onThreadStarted,
-      onTurnStarted,
-      onTurnCompleted,
+      onTurnStartedTracked,
+      onTurnCompletedTracked,
       onProcessingHeartbeat,
       onTurnPlanUpdated,
       onThreadTokenUsageUpdated,
       onAccountRateLimitsUpdated,
-      onTurnError,
+      onTurnErrorTracked,
       onContextCompacting,
       onContextCompacted,
       onContextCompactionFailed,
       onThreadSessionIdUpdated,
-      onCollaborationModeResolved,
     ],
   );
 

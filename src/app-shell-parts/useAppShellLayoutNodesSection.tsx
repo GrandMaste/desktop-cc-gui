@@ -202,6 +202,34 @@ export function useAppShellLayoutNodesSection(ctx: any) {
     handleApprovalBatchAccept,
     handleApprovalRemember,
     handleUserInputSubmit: handleUserInputSubmitWithPlanApply,
+    onRecoverThreadRuntime: async (workspaceId, threadId) => refreshThread(workspaceId, threadId),
+    onRecoverThreadRuntimeAndResend: async (workspaceId, threadId, message) => {
+      const workspace =
+        workspacesById[workspaceId]
+        ?? workspaces.find((entry: any) => entry.id === workspaceId)
+        ?? null;
+      if (!workspace) {
+        return null;
+      }
+      const recoveredThreadId = await refreshThread(workspaceId, threadId);
+      const targetThreadId =
+        typeof recoveredThreadId === "string" && recoveredThreadId.trim()
+          ? recoveredThreadId
+          : threadId;
+      const nextText = message.text.trim();
+      const nextImages = message.images ?? [];
+      if (!targetThreadId || (!nextText && nextImages.length === 0)) {
+        return targetThreadId || null;
+      }
+      if (!workspace.connected) {
+        await connectWorkspace(workspace);
+      }
+      await sendUserMessageToThread(workspace, targetThreadId, nextText, nextImages, {
+        suppressUserMessageRender: true,
+        skipOptimisticUserBubble: true,
+      });
+      return targetThreadId;
+    },
     handleExitPlanModeExecute,
     onOpenSettings: () => openSettings(),
     onOpenAgentSettings: () => openSettings("agents"),

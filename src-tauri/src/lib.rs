@@ -40,6 +40,7 @@ mod project_memory;
 mod prompts;
 mod remote_backend;
 mod rules;
+mod runtime;
 mod runtime_log;
 mod settings;
 mod shared;
@@ -113,6 +114,20 @@ pub fn run() {
             }
             let state = state::AppState::load(&app.handle());
             app.manage(state);
+            {
+                let app_handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    loop {
+                        tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+                        let state = app_handle.state::<state::AppState>();
+                        if state.runtime_manager.is_shutting_down() {
+                            break;
+                        }
+                        let settings = state.app_settings.lock().await.clone();
+                        crate::runtime::run_reconcile_cycle(&state, &settings).await;
+                    }
+                });
+            }
             #[cfg(desktop)]
             {
                 app.handle()
@@ -265,6 +280,14 @@ pub fn run() {
             let manager = &state.engine_manager;
             tauri::async_runtime::block_on(async {
                 manager.claude_manager.interrupt_all().await;
+                if state
+                    .app_settings
+                    .lock()
+                    .await
+                    .runtime_force_cleanup_on_exit
+                {
+                    crate::runtime::shutdown_managed_runtimes(&state).await;
+                }
                 crate::terminal::cleanup_all_terminal_sessions(&state).await;
             });
         }

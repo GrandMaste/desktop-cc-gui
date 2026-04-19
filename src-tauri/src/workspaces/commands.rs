@@ -1260,17 +1260,19 @@ pub(crate) async fn add_clone(
             let mut workspaces = state.workspaces.lock().await;
             workspaces.remove(&entry.id);
         }
-        let mut child = session.child.lock().await;
-        let _ = child.kill().await;
+        let _ = crate::runtime::terminate_workspace_session(session, None).await;
         let _ = tokio::fs::remove_dir_all(&destination_path).await;
         return Err(error);
     }
 
-    state
-        .sessions
-        .lock()
-        .await
-        .insert(entry.id.clone(), session);
+    crate::runtime::replace_workspace_session(
+        &state.sessions,
+        Some(&state.runtime_manager),
+        entry.id.clone(),
+        session,
+        "workspace-clone",
+    )
+    .await?;
 
     Ok(WorkspaceInfo {
         id: entry.id,
@@ -1799,6 +1801,7 @@ pub(crate) async fn connect_workspace(
             &state.workspaces,
             &state.sessions,
             &state.app_settings,
+            Some(&state.runtime_manager),
             |entry, default_bin, codex_args, codex_home| {
                 spawn_with_app(&app, entry, default_bin, codex_args, codex_home)
             },

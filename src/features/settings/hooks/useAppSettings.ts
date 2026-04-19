@@ -160,6 +160,12 @@ const defaultSettings: AppSettings = {
   workspaceGroups: [],
   openAppTargets: DEFAULT_OPEN_APP_TARGETS,
   selectedOpenAppId: DEFAULT_OPEN_APP_ID,
+  runtimeRestoreThreadsOnlyOnLaunch: true,
+  runtimeForceCleanupOnExit: true,
+  runtimeOrphanSweepOnLaunch: true,
+  codexMaxHotRuntimes: 1,
+  codexMaxWarmRuntimes: 1,
+  codexWarmTtlSeconds: 90,
 };
 
 function normalizeAppSettings(
@@ -218,6 +224,19 @@ function normalizeAppSettings(
       settings.codeFontFamily,
       DEFAULT_CODE_FONT_FAMILY,
     ),
+    runtimeRestoreThreadsOnlyOnLaunch:
+      settings.runtimeRestoreThreadsOnlyOnLaunch !== false,
+    runtimeForceCleanupOnExit: settings.runtimeForceCleanupOnExit !== false,
+    runtimeOrphanSweepOnLaunch: settings.runtimeOrphanSweepOnLaunch !== false,
+    codexMaxHotRuntimes: Number.isFinite(settings.codexMaxHotRuntimes)
+      ? Math.max(0, Math.min(8, Math.trunc(settings.codexMaxHotRuntimes)))
+      : 1,
+    codexMaxWarmRuntimes: Number.isFinite(settings.codexMaxWarmRuntimes)
+      ? Math.max(0, Math.min(16, Math.trunc(settings.codexMaxWarmRuntimes)))
+      : 1,
+    codexWarmTtlSeconds: Number.isFinite(settings.codexWarmTtlSeconds)
+      ? Math.max(15, Math.min(3600, Math.trunc(settings.codexWarmTtlSeconds)))
+      : 90,
     codeFontSize: clampCodeFontSize(settings.codeFontSize),
     notificationSoundId: ALLOWED_NOTIFICATION_SOUND_IDS.has(settings.notificationSoundId)
       ? settings.notificationSoundId
