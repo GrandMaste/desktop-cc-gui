@@ -40,5 +40,6 @@ import "./styles/kanban.css";
 import "./styles/git-history.css";
 import "./styles/search-palette.css";
 import "./styles/panel-lock.css";
+import "./styles/loading-progress-modal.css";
 import "./styles/spec-hub.css";
 import "./styles/workspace-home.css";

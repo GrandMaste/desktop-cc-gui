@@ -85,6 +85,7 @@ import {
   isThreadResumeNotFoundError,
   isWorkspaceNotConnectedError,
   mapWithConcurrency,
+  mergeCodexCatalogSessionSummaries,
   mergeGeminiSessionSummaries,
   mergeRecoveredThreadSummaries,
   normalizeGeminiSessionSummaries,
@@ -93,12 +94,20 @@ import {
   resolveRewindSupportedEngine,
   resolveThreadSourceMeta,
   restoreThreadParentLinksFromSnapshot,
+  listReplacementThreadCandidates,
+  selectReplacementThreadByMessageHistory,
   selectReplacementThreadSummary,
   shouldIncludeWorkspaceThreadEntry,
   shouldReplaceUserInputQueueFromSnapshot,
   withTimeout,
   type GeminiSessionSummary,
 } from "./useThreadActions.helpers";
+import {
+  buildPartialHistoryDiagnostic,
+  resolveThreadStabilityDiagnostic,
+} from "../utils/stabilityDiagnostics";
+import { loadSidebarSnapshot } from "../utils/sidebarSnapshot";
+import { buildThreadDebugCorrelation } from "../utils/threadDebugCorrelation";
 import {
   normalizeRewindMode,
   shouldRestoreWorkspaceFiles,
@@ -144,17 +153,52 @@ const THREAD_LIST_MAX_EMPTY_PAGES = 5;
 const THREAD_LIST_MAX_EMPTY_PAGES_WITH_ACTIVITY = 20;
 const THREAD_LIST_MAX_TOTAL_PAGES = 40;
 const THREAD_LIST_MAX_EMPTY_PAGES_LOAD_OLDER = 10;
-const THREAD_LIST_MAX_FETCH_DURATION_MS = 1_500;
-const THREAD_LIST_LIVE_REQUEST_TIMEOUT_MS = 1_600;
+const SIDEBAR_THREAD_LIST_TIMEOUT_MS = 30_000;
+const THREAD_LIST_MAX_FETCH_DURATION_MS = SIDEBAR_THREAD_LIST_TIMEOUT_MS;
+const THREAD_LIST_LIVE_REQUEST_TIMEOUT_MS = SIDEBAR_THREAD_LIST_TIMEOUT_MS;
 const THREAD_RECOVERY_MAX_PAGES = 3;
-const THREAD_RECOVERY_MAX_FETCH_DURATION_MS = 800;
+const THREAD_RECOVERY_MAX_FETCH_DURATION_MS = SIDEBAR_THREAD_LIST_TIMEOUT_MS;
+const THREAD_RECOVERY_HISTORY_MATCH_CANDIDATES = 8;
 const RELATED_THREAD_LOAD_CONCURRENCY = 2;
 const DEFAULT_CLAUDE_CONTEXT_WINDOW = 200_000;
 const GEMINI_SESSION_CACHE_TTL_MS = 60_000;
-const GEMINI_SESSION_FETCH_TIMEOUT_MS = 800;
-const NATIVE_SESSION_LIST_FETCH_TIMEOUT_MS = 800;
+const GEMINI_SESSION_FETCH_TIMEOUT_MS = SIDEBAR_THREAD_LIST_TIMEOUT_MS;
+const NATIVE_SESSION_LIST_FETCH_TIMEOUT_MS = SIDEBAR_THREAD_LIST_TIMEOUT_MS;
+const CODEX_SESSION_CATALOG_FETCH_TIMEOUT_MS = SIDEBAR_THREAD_LIST_TIMEOUT_MS;
 const SESSION_CATALOG_PAGE_SIZE = 200;
 const SESSION_CATALOG_MAX_PAGES = 20;
+
+function normalizeThreadListPartialSource(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const normalized = value.trim();
+  return normalized.length > 0 ? normalized : null;
+}
+
+function hasHealthyThreadSummaries(
+  threads: ThreadSummary[] | undefined,
+): threads is ThreadSummary[] {
+  return (
+    Array.isArray(threads)
+    && threads.length > 0
+    && !threads.some((thread) => thread.isDegraded)
+  );
+}
+
+function markThreadSummariesDegraded(
+  threads: ThreadSummary[],
+  partialSource: string,
+  degradedReason: string,
+): ThreadSummary[] {
+  return threads.map((thread) => ({
+    ...thread,
+    partialSource,
+    isDegraded: true,
+    degradedReason,
+  }));
+}
+
 type RewindFromMessageOptions = {
   activate?: boolean;
   mode?: RewindMode;
@@ -190,7 +234,32 @@ export function useThreadActions({
   const claudeRewindInFlightByThreadRef = useRef<Record<string, boolean>>({});
   const latestThreadsByWorkspaceRef = useRef(threadsByWorkspace);
   latestThreadsByWorkspaceRef.current = threadsByWorkspace;
-  const canListWorkspaceSessions = typeof tauriServices.listWorkspaceSessions === "function";
+  const listWorkspaceSessionsService = Object.prototype.hasOwnProperty.call(
+    tauriServices,
+    "listWorkspaceSessions",
+  )
+    ? tauriServices.listWorkspaceSessions
+    : null;
+  const canListWorkspaceSessions = typeof listWorkspaceSessionsService === "function";
+
+  const getLastGoodThreadSummaries = useCallback(
+    (workspaceId: string): ThreadSummary[] => {
+      const currentThreads = latestThreadsByWorkspaceRef.current[workspaceId];
+      if (hasHealthyThreadSummaries(currentThreads)) {
+        return currentThreads;
+      }
+      const stateThreads = threadsByWorkspace[workspaceId];
+      if (hasHealthyThreadSummaries(stateThreads)) {
+        return stateThreads;
+      }
+      const snapshotThreads = loadSidebarSnapshot()?.threadsByWorkspace[workspaceId];
+      if (hasHealthyThreadSummaries(snapshotThreads)) {
+        return snapshotThreads;
+      }
+      return [];
+    },
+    [threadsByWorkspace],
+  );
 
   const loadArchivedSessionMap = useCallback(
     async (workspaceId: string): Promise<Map<string, number> | null> => {
@@ -202,7 +271,7 @@ export function useThreadActions({
         let cursor: string | null = null;
         let pagesFetched = 0;
         do {
-          const response = await tauriServices.listWorkspaceSessions(workspaceId, {
+          const response = await listWorkspaceSessionsService(workspaceId, {
             query: { status: "all" },
             cursor,
             limit: SESSION_CATALOG_PAGE_SIZE,
@@ -628,6 +697,11 @@ export function useThreadActions({
             dispatch({ type: "addUserInputRequest", request });
           });
           if (snapshot.fallbackWarnings.length > 0) {
+            const partialHistoryDiagnostic = buildPartialHistoryDiagnostic(
+              snapshot.fallbackWarnings
+                .map((entry) => String(entry.code ?? "unknown"))
+                .join(", "),
+            );
             onDebug?.({
               id: `${Date.now()}-history-loader-fallback`,
               timestamp: Date.now(),
@@ -637,12 +711,17 @@ export function useThreadActions({
                 workspaceId,
                 threadId: effectiveThreadId,
                 warnings: snapshot.fallbackWarnings,
+                diagnosticCategory: partialHistoryDiagnostic.category,
+                diagnosticMessage: partialHistoryDiagnostic.rawMessage,
               },
             });
           }
           loadedThreadsRef.current[effectiveThreadId] = true;
         };
-        const recoverReplacementThreadId = async () => {
+        const recoverReplacementThread = async (): Promise<{
+          threadId: string;
+          snapshot?: Awaited<ReturnType<ReturnType<typeof createHistoryLoader>["load"]>>;
+        } | null> => {
           const existingSummaries =
             latestThreadsByWorkspaceRef.current[workspaceId] ??
             threadsByWorkspace[workspaceId] ??
@@ -798,13 +877,99 @@ export function useThreadActions({
               [workspaceId]: nextSummaries,
             };
           }
-          return (
-            selectReplacementThreadSummary({
-              staleThreadId: threadId,
-              summaries: nextSummaries,
-              staleSummary,
-            })?.id ?? null
+          const summaryMatch = selectReplacementThreadSummary({
+            staleThreadId: threadId,
+            summaries: nextSummaries,
+            staleSummary,
+          });
+          if (summaryMatch) {
+            return { threadId: summaryMatch.id };
+          }
+
+          const staleItems = itemsByThread[threadId] ?? [];
+          if (staleItems.length === 0) {
+            return null;
+          }
+
+          const historyCandidates = listReplacementThreadCandidates({
+            staleThreadId: threadId,
+            summaries: nextSummaries,
+            staleSummary,
+          })
+            .sort((left, right) => right.updatedAt - left.updatedAt)
+            .slice(0, THREAD_RECOVERY_HISTORY_MATCH_CANDIDATES);
+          if (historyCandidates.length === 0) {
+            return null;
+          }
+          const historyCandidateById = new Map(
+            historyCandidates.map((summary) => [summary.id, summary] as const),
           );
+
+          const candidateSnapshots = await mapWithConcurrency(
+            historyCandidates.map((summary) => summary.id),
+            RELATED_THREAD_LOAD_CONCURRENCY,
+            async (candidateThreadId) => {
+              const summary = historyCandidateById.get(candidateThreadId);
+              if (!summary) {
+                return null;
+              }
+              try {
+                const snapshot = await createHistoryLoader(summary.id).load(summary.id);
+                return { summary, snapshot };
+              } catch (candidateError) {
+                const diagnostic = buildPartialHistoryDiagnostic(
+                  candidateError instanceof Error
+                    ? candidateError.message
+                    : String(candidateError),
+                );
+                onDebug?.({
+                  id: `${Date.now()}-history-loader-recovery-candidate-error`,
+                  timestamp: Date.now(),
+                  source: "error",
+                  label: "thread/history recovery candidate error",
+                  payload: {
+                    workspaceId,
+                    staleThreadId: threadId,
+                    candidateThreadId: summary.id,
+                    diagnosticCategory: diagnostic.category,
+                    error:
+                      candidateError instanceof Error
+                        ? candidateError.message
+                        : String(candidateError),
+                  },
+                });
+                return null;
+              }
+            },
+          );
+          const historyMatch = selectReplacementThreadByMessageHistory({
+            staleItems,
+            candidates: candidateSnapshots
+              .filter(
+                (
+                  candidate,
+                ): candidate is {
+                  summary: typeof historyCandidates[number];
+                  snapshot: Awaited<
+                    ReturnType<ReturnType<typeof createHistoryLoader>["load"]>
+                  >;
+                } => candidate !== null,
+              )
+              .map(({ summary, snapshot }) => ({
+                summary,
+                items: snapshot.items,
+              })),
+          });
+          if (!historyMatch) {
+            return null;
+          }
+          const matchedSnapshot = candidateSnapshots.find(
+            (candidate) => candidate?.summary.id === historyMatch.id,
+          )?.snapshot;
+          return {
+            threadId: historyMatch.id,
+            ...(matchedSnapshot ? { snapshot: matchedSnapshot } : {}),
+          };
         };
         try {
           const snapshot = await createHistoryLoader(threadId).load(threadId);
@@ -813,11 +978,14 @@ export function useThreadActions({
         } catch (error) {
           if (isThreadResumeNotFoundError(error)) {
             try {
-              const replacementThreadId = await recoverReplacementThreadId();
-              if (replacementThreadId) {
-                const replacementSnapshot = await createHistoryLoader(
-                  replacementThreadId,
-                ).load(replacementThreadId);
+              const recoveredThread = await recoverReplacementThread();
+              if (recoveredThread) {
+                const replacementThreadId = recoveredThread.threadId;
+                const replacementSnapshot =
+                  recoveredThread.snapshot ??
+                  (await createHistoryLoader(replacementThreadId).load(
+                    replacementThreadId,
+                  ));
                 await hydrateHistorySnapshot(replacementThreadId, replacementSnapshot);
                 dispatch({
                   type: "clearUserInputRequestsForThread",
@@ -845,24 +1013,41 @@ export function useThreadActions({
                 return replacementThreadId;
               }
             } catch (recoveryError) {
+              const diagnostic = buildPartialHistoryDiagnostic(
+                recoveryError instanceof Error
+                  ? recoveryError.message
+                  : String(recoveryError),
+              );
               onDebug?.({
                 id: `${Date.now()}-history-loader-recovery-error`,
                 timestamp: Date.now(),
                 source: "error",
                 label: "thread/history recovery error",
-                payload:
-                  recoveryError instanceof Error
-                    ? recoveryError.message
-                    : String(recoveryError),
+                payload: {
+                  diagnosticCategory: diagnostic.category,
+                  error:
+                    recoveryError instanceof Error
+                      ? recoveryError.message
+                      : String(recoveryError),
+                },
               });
             }
           }
+          const stabilityDiagnostic =
+            error instanceof Error
+              ? resolveThreadStabilityDiagnostic(error.message)
+              : resolveThreadStabilityDiagnostic(String(error));
           onDebug?.({
             id: `${Date.now()}-history-loader-error`,
             timestamp: Date.now(),
             source: "error",
             label: "thread/history loader error",
-            payload: error instanceof Error ? error.message : String(error),
+            payload: {
+              error: error instanceof Error ? error.message : String(error),
+              diagnosticCategory:
+                stabilityDiagnostic?.category ?? "partial_history",
+              recoveryReason: stabilityDiagnostic?.reconnectReason ?? null,
+            },
           });
           // Fallback to legacy path to preserve recovery.
         }
@@ -1729,9 +1914,23 @@ export function useThreadActions({
         timestamp: Date.now(),
         source: "client",
         label: "thread/list",
-        payload: { workspaceId: workspace.id, path: workspace.path },
+        payload: buildThreadDebugCorrelation(
+          {
+            workspaceId: workspace.id,
+            action: "thread-list-refresh",
+            engine: "multi",
+          },
+          { path: workspace.path },
+        ),
       });
       try {
+        let degradedPartialSource: string | null = null;
+        const rememberPartialSource = (value: unknown) => {
+          const normalized = normalizeThreadListPartialSource(value);
+          if (normalized && !degradedPartialSource) {
+            degradedPartialSource = normalized;
+          }
+        };
         let mappedTitles: Record<string, string> = {};
         const archivedSessionMapPromise = loadArchivedSessionMap(workspace.id);
         try {
@@ -1803,6 +2002,7 @@ export function useThreadActions({
               }
             })(), THREAD_LIST_LIVE_REQUEST_TIMEOUT_MS);
             if (liveResponse === null) {
+              rememberPartialSource("thread-list-live-timeout");
               onDebug?.({
                 id: `${Date.now()}-client-thread-list-live-timeout`,
                 timestamp: Date.now(),
@@ -1821,15 +2021,23 @@ export function useThreadActions({
             if (!isWorkspaceNotConnectedError(error)) {
               throw error;
             }
+            rememberPartialSource("workspace-not-connected");
             onDebug?.({
               id: `${Date.now()}-client-thread-list-codex-unavailable`,
               timestamp: Date.now(),
               source: "client",
               label: "thread/list codex unavailable",
-              payload: {
-                workspaceId: workspace.id,
-                reason: error instanceof Error ? error.message : String(error),
-              },
+              payload: buildThreadDebugCorrelation(
+                {
+                  workspaceId: workspace.id,
+                  action: "thread-list-codex-unavailable",
+                  engine: "codex",
+                  recoveryState: "recovering",
+                },
+                {
+                  reason: error instanceof Error ? error.message : String(error),
+                },
+              ),
             });
             break;
           }
@@ -1841,6 +2049,7 @@ export function useThreadActions({
             payload: response,
           });
           const result = (response.result ?? response) as Record<string, unknown>;
+          rememberPartialSource(result.partialSource ?? result.partial_source);
           const data = Array.isArray(result?.data)
             ? (result.data as Record<string, unknown>[])
             : [];
@@ -1976,15 +2185,26 @@ export function useThreadActions({
               NATIVE_SESSION_LIST_FETCH_TIMEOUT_MS,
             )
           : Promise.resolve([] as Awaited<ReturnType<typeof getOpenCodeSessionListService>>);
-        const [claudeResult, opencodeResult] = await Promise.allSettled([
+        const codexCatalogSessionsPromise = canListWorkspaceSessions
+          ? withTimeout(
+              listWorkspaceSessionsService(workspace.id, {
+                query: { status: "active", engine: "codex" },
+                limit: SESSION_CATALOG_PAGE_SIZE,
+              }),
+              CODEX_SESSION_CATALOG_FETCH_TIMEOUT_MS,
+            )
+          : Promise.resolve(null);
+        const [claudeResult, opencodeResult, codexCatalogResult] = await Promise.allSettled([
           withTimeout(
             listClaudeSessionsService(workspace.path, 50),
             NATIVE_SESSION_LIST_FETCH_TIMEOUT_MS,
           ),
           opencodeSessionsPromise,
+          codexCatalogSessionsPromise,
         ]);
         if (claudeResult.status === "fulfilled") {
           if (claudeResult.value === null) {
+            rememberPartialSource("claude-session-timeout");
             onDebug?.({
               id: `${Date.now()}-client-claude-session-timeout`,
               timestamp: Date.now(),
@@ -2031,6 +2251,7 @@ export function useThreadActions({
         }
         if (opencodeResult.status === "fulfilled") {
           if (opencodeResult.value === null) {
+            rememberPartialSource("opencode-session-timeout");
             onDebug?.({
               id: `${Date.now()}-client-opencode-session-timeout`,
               timestamp: Date.now(),
@@ -2079,6 +2300,82 @@ export function useThreadActions({
               mergedById.set(id, next);
             }
           });
+        }
+        if (codexCatalogResult.status === "fulfilled") {
+          if (codexCatalogResult.value === null) {
+            rememberPartialSource("codex-catalog-timeout");
+            onDebug?.({
+              id: `${Date.now()}-client-codex-catalog-timeout`,
+              timestamp: Date.now(),
+              source: "client",
+              label: "thread/list codex catalog timeout",
+              payload: {
+                workspaceId: workspace.id,
+                timeoutMs: NATIVE_SESSION_LIST_FETCH_TIMEOUT_MS,
+              },
+            });
+          }
+          const codexCatalogPage =
+            codexCatalogResult.value && typeof codexCatalogResult.value === "object"
+              ? codexCatalogResult.value
+              : null;
+          rememberPartialSource(codexCatalogPage?.partialSource);
+          const codexCatalogSessions = Array.isArray(codexCatalogPage?.data)
+            ? codexCatalogPage.data
+                .filter(
+                  (entry) =>
+                    entry &&
+                    typeof entry === "object" &&
+                    !hiddenSharedBindingIds.has(
+                      String((entry as { sessionId?: unknown }).sessionId ?? ""),
+                    ),
+                )
+                .map((entry) => {
+                  const session = entry as {
+                    sessionId?: unknown;
+                    title?: unknown;
+                    updatedAt?: unknown;
+                    sizeBytes?: unknown;
+                    source?: unknown;
+                    provider?: unknown;
+                    sourceLabel?: unknown;
+                  };
+                  return {
+                    sessionId: String(session.sessionId ?? "").trim(),
+                    title: String(session.title ?? "").trim(),
+                    updatedAt:
+                      typeof session.updatedAt === "number" && Number.isFinite(session.updatedAt)
+                        ? session.updatedAt
+                        : 0,
+                    sizeBytes:
+                      typeof session.sizeBytes === "number" && Number.isFinite(session.sizeBytes)
+                        ? session.sizeBytes
+                        : undefined,
+                    source:
+                      typeof session.source === "string" || session.source == null
+                        ? session.source ?? null
+                        : null,
+                    provider:
+                      typeof session.provider === "string" || session.provider == null
+                        ? session.provider ?? null
+                        : null,
+                    sourceLabel:
+                      typeof session.sourceLabel === "string" || session.sourceLabel == null
+                        ? session.sourceLabel ?? null
+                        : null,
+                  };
+                })
+                .filter((entry) => entry.sessionId.length > 0)
+            : [];
+          allSummaries = mergeCodexCatalogSessionSummaries(
+            Array.from(mergedById.values()).sort((a, b) => b.updatedAt - a.updatedAt),
+            codexCatalogSessions,
+            workspace.id,
+            mappedTitles,
+            getCustomName,
+          );
+          mergedById.clear();
+          allSummaries.forEach((entry) => mergedById.set(entry.id, entry));
         }
         if (!includeOpenCodeSessions) {
           existingThreads.forEach((thread) => {
@@ -2160,14 +2457,55 @@ export function useThreadActions({
           return;
         }
 
+        let visibleSummaries = allSummaries;
+        if (visibleSummaries.length === 0 && degradedPartialSource) {
+          const fallbackThreads = getLastGoodThreadSummaries(workspace.id);
+          if (fallbackThreads.length > 0) {
+            visibleSummaries = markThreadSummariesDegraded(
+              fallbackThreads,
+              degradedPartialSource,
+              "last-good-fallback",
+            );
+            const diagnostic = buildPartialHistoryDiagnostic(
+              `thread list fallback: ${degradedPartialSource}`,
+            );
+            onDebug?.({
+              id: `${Date.now()}-client-thread-list-fallback`,
+              timestamp: Date.now(),
+              source: "client",
+              label: "thread/list fallback",
+              payload: buildThreadDebugCorrelation(
+                {
+                  workspaceId: workspace.id,
+                  action: "thread-list-fallback",
+                  engine: "multi",
+                  diagnosticCategory: diagnostic.category,
+                  recoveryState: "degraded",
+                },
+                {
+                  partialSource: degradedPartialSource,
+                  fallbackCount: visibleSummaries.length,
+                  diagnosticMessage: diagnostic.rawMessage,
+                },
+              ),
+            });
+          }
+        } else if (degradedPartialSource) {
+          visibleSummaries = markThreadSummariesDegraded(
+            visibleSummaries,
+            degradedPartialSource,
+            "partial-thread-list",
+          );
+        }
+
         dispatch({
           type: "setThreads",
           workspaceId: workspace.id,
-          threads: allSummaries,
+          threads: visibleSummaries,
         });
         latestThreadsByWorkspaceRef.current = {
           ...latestThreadsByWorkspaceRef.current,
-          [workspace.id]: allSummaries,
+          [workspace.id]: visibleSummaries,
         };
         dispatch({
           type: "setThreadListCursor",
@@ -2264,12 +2602,62 @@ export function useThreadActions({
           })();
         }
       } catch (error) {
+        const fallbackThreads = getLastGoodThreadSummaries(workspace.id);
+        if (isLatestThreadListRequest() && fallbackThreads.length > 0) {
+          const fallbackMessage = error instanceof Error ? error.message : String(error);
+          const degradedThreads = markThreadSummariesDegraded(
+            fallbackThreads,
+            fallbackMessage,
+            "last-good-fallback",
+          );
+          dispatch({
+            type: "setThreads",
+            workspaceId: workspace.id,
+            threads: degradedThreads,
+          });
+          latestThreadsByWorkspaceRef.current = {
+            ...latestThreadsByWorkspaceRef.current,
+            [workspace.id]: degradedThreads,
+          };
+          const diagnostic = buildPartialHistoryDiagnostic(
+            `thread list error fallback: ${fallbackMessage}`,
+          );
+              onDebug?.({
+                id: `${Date.now()}-client-thread-list-error-fallback`,
+                timestamp: Date.now(),
+                source: "client",
+                label: "thread/list error fallback",
+                payload: buildThreadDebugCorrelation(
+                  {
+                    workspaceId: workspace.id,
+                    action: "thread-list-error-fallback",
+                    engine: "multi",
+                    diagnosticCategory: diagnostic.category,
+                    recoveryState: "degraded",
+                  },
+                  {
+                    fallbackCount: degradedThreads.length,
+                    diagnosticMessage: diagnostic.rawMessage,
+                  },
+                ),
+              });
+        }
         onDebug?.({
           id: `${Date.now()}-client-thread-list-error`,
           timestamp: Date.now(),
           source: "error",
           label: "thread/list error",
-          payload: error instanceof Error ? error.message : String(error),
+          payload: buildThreadDebugCorrelation(
+            {
+              workspaceId: workspace.id,
+              action: "thread-list-error",
+              engine: "multi",
+              recoveryState: "recovering",
+            },
+            {
+              error: error instanceof Error ? error.message : String(error),
+            },
+          ),
         });
       } finally {
         if (!preserveState && isLatestThreadListRequest()) {
@@ -2283,8 +2671,10 @@ export function useThreadActions({
     },
     [
       applySessionArchiveState,
+      canListWorkspaceSessions,
       dispatch,
       getCustomName,
+      getLastGoodThreadSummaries,
       loadArchivedSessionMap,
       onDebug,
       onThreadTitleMappingsLoaded,

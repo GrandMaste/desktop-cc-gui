@@ -4,6 +4,7 @@ const enPart1 = {
     loading: "Loading…",
     saving: "Saving…",
     creating: "Creating…",
+    deleting: "Deleting…",
     save: "Save",
     create: "Create",
     cancel: "Cancel",
@@ -132,7 +133,9 @@ const enPart1 = {
     newWorktreeAgent: "New worktree agent",
     newCloneAgent: "New clone agent",
     sessionActionsGroup: "New Session",
+    activateWorkspace: "Open in main panel",
     workspaceActionsGroup: "Workspace Actions",
+    emptyWorkspaceSessions: "No sessions yet.",
     deprecatedTag: "Deprecated",
     unavailableTag: "Unavailable",
     removeWorkspace: "Remove workspace",
@@ -406,6 +409,10 @@ const enPart1 = {
     globalAgentsMd: "Global AGENTS.md",
     globalCodexConfig: "Global Codex Config",
     openInFinder: "Open in Finder",
+    openInFileManager: "Open in {{fileManager}}",
+    fileManagerFinder: "Finder",
+    fileManagerExplorer: "Explorer",
+    fileManagerGeneric: "File Manager",
 
     // Workspace groups
     workspaceGroups: "Workspace Groups",
@@ -879,11 +886,40 @@ const enPart1 = {
     projectSessionEngineOpencode: "OpenCode",
     sessionManagementDescription:
       "Manage real session history per project with paged loading, filtering, batch archive, unarchive, and deletion.",
+    sessionManagementModeProject: "Project view",
+    sessionManagementModeGlobal: "Global archive",
+    sessionManagementGlobalCodexOnly:
+      "Global history currently shows Codex sessions visible to this client.",
+    sessionManagementGlobalEmpty: "No global Codex history is currently visible.",
+    sessionManagementGlobalSectionTitle: "Global Codex history",
+    sessionManagementGlobalSectionDescription:
+      "This surface shows the full Codex history currently visible to this client.",
+    sessionManagementViewGlobalCta: "View global archive",
+    sessionManagementProjectEmptyStrictHint:
+      "This list only shows strict matches for the current project. Empty here does not mean this machine has no other visible history.",
+    sessionManagementStrictSectionTitle: "Strict project sessions",
+    sessionManagementRelatedSectionTitle: "Related history",
+    sessionManagementRelatedSectionDescription:
+      "These sessions are related to the current project, but they are not strict path matches.",
+    sessionManagementWorkspaceUnassigned: "Unassigned history",
+    sessionManagementScopeTagProject: "[project]",
+    sessionManagementScopeTagWorktree: "[worktree]",
     sessionManagementSearchPlaceholder: "Search by title, ID, or source...",
     sessionManagementEngineAll: "All engines",
     sessionManagementStatusActive: "Active only",
     sessionManagementStatusArchived: "Archived only",
     sessionManagementStatusAll: "All sessions",
+    sessionManagementSidebarStatusHint:
+      'The current filter is "{{status}}". The sidebar only shows active, unarchived sessions, so its count can be smaller.',
+    sessionManagementProjectScopeHint:
+      "This project view aggregates the selected workspace and its {{count}} worktrees. The sidebar splits them by workspace.",
+    sessionManagementFilteredTotalCount: "{{count}} in filtered total",
+    sessionManagementCurrentPageCount: "{{count}} on this page",
+    sessionManagementVisibleWindowHint:
+      "Only {{visible}} sessions are loaded on this page, while the filtered project total is {{total}}.",
+    sessionManagementActiveProjectionScopeHint:
+      "The default active projection currently spans {{count}} workspaces and {{active}} active sessions.",
+    sessionManagementProjectionLoading: "Syncing shared project projection...",
     sessionManagementArchiveSelected: "Archive selected",
     sessionManagementUnarchiveSelected: "Unarchive selected",
     sessionManagementArchiveSuccess: "Archived {{count}} sessions.",
@@ -891,8 +927,18 @@ const enPart1 = {
     sessionManagementDeleteSuccess: "Deleted {{count}} sessions.",
     sessionManagementMutationPartial:
       "Processed {{succeeded}} sessions, {{failed}} failed. {{reason}}",
+    sessionManagementOwnerUnresolved:
+      "This session does not have a uniquely resolved owner workspace yet, so archive, unarchive, and delete are currently blocked.",
+    sessionManagementMissingMutationResult:
+      "The session mutation result was incomplete. Refresh and try again.",
     sessionManagementPartialSource: "Current result includes fallback source: {{source}}",
     sessionManagementBadgeArchived: "Archived",
+    sessionManagementBadgeRelated: "Inferred",
+    sessionManagementAttributionReasonWorktreeFamily: "Same worktree family",
+    sessionManagementAttributionReasonGitRoot: "Same git root",
+    sessionManagementAttributionReasonParentScope: "Matched parent project scope",
+    sessionManagementAttributionConfidenceHigh: "High confidence",
+    sessionManagementAttributionConfidenceMedium: "Medium confidence",
     sessionManagementLoadMore: "Load more",
     sessionManagementLoadingMore: "Loading more...",
     radarHistoryTitle: "Radar History Management",
@@ -1368,21 +1414,31 @@ const enPart1 = {
     // Experimental section
     experimentalTitle: "Experimental",
     experimentalDescription: "Preview features that may change or be removed.",
-    experimentalWarning1: "Experimental flags are stored in the default CODEX_HOME config.toml.",
-    experimentalWarning2: "Workspace overrides are not updated.",
+    experimentalWarning1:
+      "Only Background terminal syncs to the default CODEX_HOME config.toml.",
+    experimentalWarning2:
+      "Collaboration modes and Steer mode stay in desktop-local settings.",
     configFile: "Config file",
-    configFileDesc: "Open the Codex config in Finder.",
-    multiAgent: "Multi-agent",
-    multiAgentDesc: "When enabled: split complex tasks across multiple agents in parallel.",
+    configFileDesc: "Open the official Codex config in {{fileManager}}.",
+    experimentalBadgeRecommended: "Recommended",
+    experimentalBadgeOfficial: "Official config",
+    experimentalBadgeAvailable: "Available",
+    experimentalBadgePreview: "Preview",
     collaborationModes: "Collaboration modes",
     collaborationModesDesc:
       "When enabled: switch between Code / Plan in composer; Plan supports interactive question cards.",
+    collaborationModesMarkerDesc:
+      "This already feeds the main interaction path and is enabled by default; keep it on if you want Plan mode.",
     backgroundTerminal: "Background terminal",
     backgroundTerminalDesc:
-      "When enabled: long-running terminal commands continue in background without blocking chat.",
-    steerMode: "Steer mode",
+      "When enabled: sync the official unified_exec passthrough for background terminal runs.",
+    backgroundTerminalMarkerDesc:
+      "This is the only experimental item that syncs to the official CODEX_HOME/config.toml. Turn it on only when you need long-running background commands.",
+    steerMode: "Follow-up fusion",
     steerModeDesc:
-      "When enabled: keep sending messages during runs and queue them automatically.",
+      "When enabled: keep asking follow-ups while a response is streaming, queue them automatically, and fuse them into the current answer when available.",
+    steerModeMarkerDesc:
+      "This is already wired into same-run continuation, queued send, and queue fusion. Turn it on if you often keep asking follow-ups while an answer is still streaming.",
 
     // Error messages
     unableToOpenConfig: "Unable to open config.",
@@ -1551,6 +1607,8 @@ const enPart1 = {
       "The runtime pipe for this session message has been closed. Reconnect the runtime, then retry your send.",
     runtimeReconnectWorkspaceNotConnected:
       "This workspace does not currently have an available managed runtime. Reconnect the runtime, then retry your send.",
+    runtimeReconnectQuarantined:
+      "The runtime is cooling down after repeated recovery failures. Wait a moment, then reconnect or resend the previous prompt.",
     runtimeReconnectAction: "Reconnect runtime",
     runtimeReconnectRunning: "Reconnecting...",
     runtimeReconnectResendAction: "Reconnect and resend previous prompt",
@@ -2263,6 +2321,9 @@ const enPart1 = {
     networkError: "Network error. Please check your connection.",
     failedToAddWorkspace: "Failed to add workspace.",
     failedToOpenNewWindow: "Failed to open a new window.",
+    failedToCreateSession: "Failed to create session.",
+    failedToCreateSessionNoThreadId:
+      "The runtime did not return a new session id.",
     cliNotFound: "Neither Claude Code CLI nor Codex CLI was found. Please install one of them.",
     cliNotFoundHint: "Install Claude Code: npm install -g @anthropic-ai/claude-code\nInstall Codex: npm install -g @openai/codex",
     codexCliNotFound: "Codex CLI not found. Install Codex and ensure `codex` is on your PATH.",
@@ -2583,6 +2644,11 @@ const enPart1 = {
     loading: "Loading...",
     searchOlder: "Search older...",
     loadOlder: "Load older...",
+    degradedWorkspaceRefreshAriaLabel: "Refresh incomplete thread list",
+    degradedWorkspaceRefreshTooltip:
+      "This project's thread list is not fully refreshed yet and may be missing some conversations. Click to refresh it again.",
+    degradedWorkspaceRefreshingAriaLabel: "Refreshing thread list",
+    degradedWorkspaceRefreshingTooltip: "Refreshing thread list...",
     sessionStopped: "Session stopped.",
     sessionStoppedForFusion: "Switched to the merged follow-up. Reply is continuing...",
     turnFailed: "Turn failed.",
@@ -2600,6 +2666,8 @@ const enPart1 = {
       "Request timed out before receiving a response. Network jitter or upstream service load may be causing delay. Please retry.",
     contextCompactionFailed: "Context compaction failed.",
     contextCompactionFailedWithMessage: "Context compaction failed: {{message}}",
+    claudeManualCompactUnavailable:
+      "No active Claude conversation is available to compact. Open an existing Claude thread, then run /compact again.",
     specRootContext: {
       title: "External Spec Root (Priority)",
       activeRoot: "Active root path",

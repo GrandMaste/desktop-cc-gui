@@ -1,5 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { shouldSkipWorkspaceThreadListLoad } from "./workspaceThreadListLoadGuard";
+import type { WorkspaceInfo } from "../types";
+import {
+  resolveNextWorkspaceThreadListHydrationId,
+  shouldSkipWorkspaceThreadListLoad,
+} from "./workspaceThreadListLoadGuard";
+
+const workspace = (id: string, connected = true): WorkspaceInfo => ({
+  id,
+  name: id,
+  path: `/tmp/${id}`,
+  connected,
+  settings: { sidebarCollapsed: false },
+});
 
 describe("shouldSkipWorkspaceThreadListLoad", () => {
   it("skips auto reload after the workspace thread list has already hydrated", () => {
@@ -28,5 +40,65 @@ describe("shouldSkipWorkspaceThreadListLoad", () => {
         hasHydratedThreadList: true,
       }),
     ).toBe(false);
+  });
+
+  it("skips duplicate loads while a tracked request is still in flight", () => {
+    expect(
+      shouldSkipWorkspaceThreadListLoad({
+        isLoading: false,
+        isHydratingThreadList: true,
+        hasHydratedThreadList: false,
+      }),
+    ).toBe(true);
+  });
+});
+
+describe("resolveNextWorkspaceThreadListHydrationId", () => {
+  it("returns the next connected non-active workspace that still needs hydration", () => {
+    expect(
+      resolveNextWorkspaceThreadListHydrationId({
+        workspaces: [workspace("ws-active"), workspace("ws-side-1"), workspace("ws-side-2")],
+        activeWorkspaceId: "ws-active",
+        hydratedWorkspaceIds: new Set(["ws-side-1"]),
+        hydratingWorkspaceIds: new Set(),
+        loadingByWorkspace: {},
+      }),
+    ).toBe("ws-side-2");
+  });
+
+  it("skips active projection owners because they are handled by the projection effect", () => {
+    expect(
+      resolveNextWorkspaceThreadListHydrationId({
+        workspaces: [
+          workspace("ws-main"),
+          workspace("ws-worktree-1"),
+          workspace("ws-worktree-2"),
+          workspace("ws-other"),
+        ],
+        activeWorkspaceId: "ws-main",
+        activeWorkspaceProjectionOwnerIds: ["ws-main", "ws-worktree-1", "ws-worktree-2"],
+        hydratedWorkspaceIds: new Set(),
+        hydratingWorkspaceIds: new Set(),
+        loadingByWorkspace: {},
+      }),
+    ).toBe("ws-other");
+  });
+
+  it("skips disconnected, loading, and already hydrating workspaces", () => {
+    expect(
+      resolveNextWorkspaceThreadListHydrationId({
+        workspaces: [
+          workspace("ws-active"),
+          workspace("ws-disconnected", false),
+          workspace("ws-loading"),
+          workspace("ws-hydrating"),
+          workspace("ws-ready"),
+        ],
+        activeWorkspaceId: "ws-active",
+        hydratedWorkspaceIds: new Set(),
+        hydratingWorkspaceIds: new Set(["ws-hydrating"]),
+        loadingByWorkspace: { "ws-loading": true },
+      }),
+    ).toBe("ws-ready");
   });
 });

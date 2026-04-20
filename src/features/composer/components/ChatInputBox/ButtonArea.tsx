@@ -111,6 +111,8 @@ export const ButtonArea = ({
   currentProvider = 'claude',
   providerAvailability,
   providerVersions,
+  providerStatusLabels,
+  providerDisabledMessages,
   reasoningEffort = 'medium',
   accountRateLimits,
   usageShowRemaining = false,
@@ -358,6 +360,8 @@ export const ButtonArea = ({
             onChange={handleProviderSelect}
             providerAvailability={providerAvailability}
             providerVersions={providerVersions}
+            providerStatusLabels={providerStatusLabels}
+            providerDisabledMessages={providerDisabledMessages}
             iconOnly
           />
         )}

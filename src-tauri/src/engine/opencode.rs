@@ -48,6 +48,19 @@ pub struct OpenCodeSession {
 }
 
 impl OpenCodeSession {
+    fn configure_spawn_command(cmd: &mut Command) {
+        #[cfg(unix)]
+        unsafe {
+            cmd.pre_exec(|| {
+                if libc::setpgid(0, 0) == 0 {
+                    Ok(())
+                } else {
+                    Err(std::io::Error::last_os_error())
+                }
+            });
+        }
+    }
+
     fn with_external_spec_hint(text: &str, custom_spec_root: Option<&str>) -> String {
         let Some(spec_root) = custom_spec_root
             .map(str::trim)
@@ -277,7 +290,31 @@ impl OpenCodeSession {
             cmd.env("OPENCODE_HOME", home);
         }
 
+        Self::configure_spawn_command(&mut cmd);
         cmd
+    }
+
+    async fn terminate_child_process(
+        &self,
+        turn_id: &str,
+        child: &mut Child,
+    ) -> Result<(), String> {
+        if matches!(child.try_wait(), Ok(Some(_))) {
+            return Ok(());
+        }
+
+        match crate::runtime::terminate_workspace_session_process(child).await {
+            Ok(_) => Ok(()),
+            Err(error) => {
+                if matches!(child.try_wait(), Ok(Some(_))) {
+                    return Ok(());
+                }
+                Err(format!(
+                    "Failed to terminate OpenCode process for turn {}: {}",
+                    turn_id, error
+                ))
+            }
+        }
     }
 
     pub async fn send_message(
@@ -327,14 +364,20 @@ impl OpenCodeSession {
             .spawn()
             .map_err(|e| format!("Failed to spawn opencode: {}", e))?;
 
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| "Failed to capture stdout".to_string())?;
-        let stderr = child
-            .stderr
-            .take()
-            .ok_or_else(|| "Failed to capture stderr".to_string())?;
+        let stdout = match child.stdout.take() {
+            Some(value) => value,
+            None => {
+                let _ = self.terminate_child_process(turn_id, &mut child).await;
+                return Err("Failed to capture stdout".to_string());
+            }
+        };
+        let stderr = match child.stderr.take() {
+            Some(value) => value,
+            None => {
+                let _ = self.terminate_child_process(turn_id, &mut child).await;
+                return Err("Failed to capture stderr".to_string());
+            }
+        };
 
         {
             let mut active = self.active_processes.lock().await;
@@ -526,14 +569,15 @@ impl OpenCodeSession {
             active.remove(turn_id)
         };
 
-        if timed_out || quiesced_without_terminal {
-            if let Some(child_proc) = child.as_mut() {
-                let _ = child_proc.kill().await;
-            }
-        }
-
         let status = if let Some(mut child_proc) = child.take() {
-            child_proc.wait().await.ok()
+            if timed_out || quiesced_without_terminal {
+                if let Err(error) = self.terminate_child_process(turn_id, &mut child_proc).await {
+                    error_output.push_str(&format!("{error}\n"));
+                }
+                None
+            } else {
+                child_proc.wait().await.ok()
+            }
         } else {
             None
         };
@@ -541,6 +585,21 @@ impl OpenCodeSession {
         let stderr_text = stderr_task.await.unwrap_or_default();
         if !stderr_text.trim().is_empty() {
             error_output.push_str(&stderr_text);
+        }
+
+        if timed_out && !quiesced_without_terminal {
+            let error_msg = if self.interrupted.swap(false, Ordering::SeqCst) {
+                "Session stopped.".to_string()
+            } else if !error_output.trim().is_empty() {
+                error_output.trim().to_string()
+            } else {
+                format!(
+                    "OpenCode timed out after {}s with no terminal event.",
+                    OPENCODE_TOTAL_TIMEOUT.as_secs()
+                )
+            };
+            self.emit_error(turn_id, error_msg.clone());
+            return Err(error_msg);
         }
 
         if let Some(status) = status {
@@ -591,14 +650,29 @@ impl OpenCodeSession {
 
     pub async fn interrupt(&self) -> Result<(), String> {
         self.interrupted.store(true, Ordering::SeqCst);
-        let mut active = self.active_processes.lock().await;
-        for child in active.values_mut() {
-            child
-                .kill()
-                .await
-                .map_err(|e| format!("Failed to kill process: {}", e))?;
+        let children: Vec<(String, Child)> = {
+            let mut active = self.active_processes.lock().await;
+            active.drain().collect()
+        };
+        let mut snapshots = self.tool_output_snapshots.lock().await;
+        snapshots.clear();
+        drop(snapshots);
+        let mut first_terminate_error: Option<String> = None;
+        for (turn_id, mut child) in children {
+            if let Err(error) = self.terminate_child_process(&turn_id, &mut child).await {
+                log::warn!(
+                    "[opencode] interrupt failed to terminate child for turn={}: {}",
+                    turn_id,
+                    error
+                );
+                if first_terminate_error.is_none() {
+                    first_terminate_error = Some(error);
+                }
+            }
         }
-        active.clear();
+        if let Some(error) = first_terminate_error {
+            return Err(error);
+        }
         Ok(())
     }
 
@@ -609,10 +683,7 @@ impl OpenCodeSession {
             active.remove(turn_id)
         };
         if let Some(child_proc) = child.as_mut() {
-            child_proc
-                .kill()
-                .await
-                .map_err(|e| format!("Failed to kill process: {}", e))?;
+            self.terminate_child_process(turn_id, child_proc).await?;
         }
         Ok(())
     }

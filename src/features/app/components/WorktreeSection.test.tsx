@@ -29,6 +29,7 @@ describe("WorktreeSection", () => {
         deletingWorktreeIds={new Set()}
         threadsByWorkspace={{ [worktree.id]: [] }}
         threadStatusById={{}}
+        hydratedThreadListWorkspaceIds={new Set()}
         threadListLoadingByWorkspace={{ [worktree.id]: false }}
         threadListPagingByWorkspace={{ [worktree.id]: false }}
         threadListCursorByWorkspace={{ [worktree.id]: "cursor" }}
@@ -47,6 +48,9 @@ describe("WorktreeSection", () => {
         onToggleThreadPin={vi.fn()}
         getPinTimestamp={() => null}
         onConnectWorkspace={vi.fn()}
+        onShowWorktreeSessionMenu={vi.fn()}
+        onQuickReloadWorkspaceThreads={vi.fn()}
+        onSelectWorkspace={vi.fn()}
         onToggleWorkspaceCollapse={vi.fn()}
         onSelectThread={vi.fn()}
         onShowThreadMenu={vi.fn()}
@@ -64,6 +68,99 @@ describe("WorktreeSection", () => {
     ).toBeNull();
   });
 
+  it("shows an empty session message instead of a loading skeleton for empty worktrees", () => {
+    render(
+      <WorktreeSection
+        parentWorkspaceId="workspace-1"
+        worktrees={[worktree]}
+        isSectionCollapsed={false}
+        onToggleSectionCollapse={vi.fn()}
+        deletingWorktreeIds={new Set()}
+        threadsByWorkspace={{ [worktree.id]: [] }}
+        threadStatusById={{}}
+        hydratedThreadListWorkspaceIds={new Set([worktree.id])}
+        threadListLoadingByWorkspace={{ [worktree.id]: true }}
+        threadListPagingByWorkspace={{ [worktree.id]: false }}
+        threadListCursorByWorkspace={{ [worktree.id]: null }}
+        expandedWorkspaces={new Set()}
+        activeWorkspaceId={null}
+        activeThreadId={null}
+        getThreadRows={() => ({
+          pinnedRows: [],
+          unpinnedRows: [],
+          totalRoots: 0,
+          hasMoreRoots: false,
+        })}
+        getThreadTime={() => null}
+        isThreadPinned={() => false}
+        isThreadAutoNaming={() => false}
+        onToggleThreadPin={vi.fn()}
+        getPinTimestamp={() => null}
+        onConnectWorkspace={vi.fn()}
+        onShowWorktreeSessionMenu={vi.fn()}
+        onQuickReloadWorkspaceThreads={vi.fn()}
+        onSelectWorkspace={vi.fn()}
+        onToggleWorkspaceCollapse={vi.fn()}
+        onSelectThread={vi.fn()}
+        onShowThreadMenu={vi.fn()}
+        onShowWorktreeMenu={vi.fn()}
+        onToggleExpanded={vi.fn()}
+        onLoadOlderThreads={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByText(/No sessions yet\.|暂无会话|sidebar\.emptyWorkspaceSessions/i),
+    ).toBeTruthy();
+    expect(screen.queryByLabelText("Loading agents")).toBeNull();
+  });
+
+  it("does not show the empty session message before worktree sessions hydrate", () => {
+    render(
+      <WorktreeSection
+        parentWorkspaceId="workspace-1"
+        worktrees={[worktree]}
+        isSectionCollapsed={false}
+        onToggleSectionCollapse={vi.fn()}
+        deletingWorktreeIds={new Set()}
+        threadsByWorkspace={{ [worktree.id]: [] }}
+        threadStatusById={{}}
+        hydratedThreadListWorkspaceIds={new Set()}
+        threadListLoadingByWorkspace={{ [worktree.id]: true }}
+        threadListPagingByWorkspace={{ [worktree.id]: false }}
+        threadListCursorByWorkspace={{ [worktree.id]: null }}
+        expandedWorkspaces={new Set()}
+        activeWorkspaceId={null}
+        activeThreadId={null}
+        getThreadRows={() => ({
+          pinnedRows: [],
+          unpinnedRows: [],
+          totalRoots: 0,
+          hasMoreRoots: false,
+        })}
+        getThreadTime={() => null}
+        isThreadPinned={() => false}
+        isThreadAutoNaming={() => false}
+        onToggleThreadPin={vi.fn()}
+        getPinTimestamp={() => null}
+        onConnectWorkspace={vi.fn()}
+        onShowWorktreeSessionMenu={vi.fn()}
+        onQuickReloadWorkspaceThreads={vi.fn()}
+        onSelectWorkspace={vi.fn()}
+        onToggleWorkspaceCollapse={vi.fn()}
+        onSelectThread={vi.fn()}
+        onShowThreadMenu={vi.fn()}
+        onShowWorktreeMenu={vi.fn()}
+        onToggleExpanded={vi.fn()}
+        onLoadOlderThreads={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.queryByText(/No sessions yet\.|暂无会话|sidebar\.emptyWorkspaceSessions/i),
+    ).toBeNull();
+  });
+
   it("toggles the worktree section on double click only", () => {
     const onToggleSectionCollapse = vi.fn();
 
@@ -76,6 +173,7 @@ describe("WorktreeSection", () => {
         deletingWorktreeIds={new Set()}
         threadsByWorkspace={{ [worktree.id]: [] }}
         threadStatusById={{}}
+        hydratedThreadListWorkspaceIds={new Set()}
         threadListLoadingByWorkspace={{ [worktree.id]: false }}
         threadListPagingByWorkspace={{ [worktree.id]: false }}
         threadListCursorByWorkspace={{ [worktree.id]: null }}
@@ -94,6 +192,9 @@ describe("WorktreeSection", () => {
         onToggleThreadPin={vi.fn()}
         getPinTimestamp={() => null}
         onConnectWorkspace={vi.fn()}
+        onShowWorktreeSessionMenu={vi.fn()}
+        onQuickReloadWorkspaceThreads={vi.fn()}
+        onSelectWorkspace={vi.fn()}
         onToggleWorkspaceCollapse={vi.fn()}
         onSelectThread={vi.fn()}
         onShowThreadMenu={vi.fn()}
@@ -127,6 +228,7 @@ describe("WorktreeSection", () => {
         deletingWorktreeIds={new Set()}
         threadsByWorkspace={{ [worktree.id]: [] }}
         threadStatusById={{}}
+        hydratedThreadListWorkspaceIds={new Set()}
         threadListLoadingByWorkspace={{ [worktree.id]: false }}
         threadListPagingByWorkspace={{ [worktree.id]: false }}
         threadListCursorByWorkspace={{ [worktree.id]: null }}
@@ -145,6 +247,9 @@ describe("WorktreeSection", () => {
         onToggleThreadPin={vi.fn()}
         getPinTimestamp={() => null}
         onConnectWorkspace={vi.fn()}
+        onShowWorktreeSessionMenu={vi.fn()}
+        onQuickReloadWorkspaceThreads={vi.fn()}
+        onSelectWorkspace={vi.fn()}
         onToggleWorkspaceCollapse={onToggleWorkspaceCollapse}
         onSelectThread={vi.fn()}
         onShowThreadMenu={vi.fn()}
@@ -162,5 +267,267 @@ describe("WorktreeSection", () => {
 
     fireEvent.click(worktreeRow);
     expect(onToggleWorkspaceCollapse).toHaveBeenCalledWith("wt-1", true);
+  });
+
+  it("renders a new session button for worktrees and does not toggle collapse when clicked", () => {
+    const onShowWorktreeSessionMenu = vi.fn();
+    const onToggleWorkspaceCollapse = vi.fn();
+
+    render(
+      <WorktreeSection
+        parentWorkspaceId="workspace-1"
+        worktrees={[worktree]}
+        isSectionCollapsed={false}
+        onToggleSectionCollapse={vi.fn()}
+        deletingWorktreeIds={new Set()}
+        threadsByWorkspace={{ [worktree.id]: [] }}
+        threadStatusById={{}}
+        hydratedThreadListWorkspaceIds={new Set()}
+        threadListLoadingByWorkspace={{ [worktree.id]: false }}
+        threadListPagingByWorkspace={{ [worktree.id]: false }}
+        threadListCursorByWorkspace={{ [worktree.id]: null }}
+        expandedWorkspaces={new Set()}
+        activeWorkspaceId={null}
+        activeThreadId={null}
+        getThreadRows={() => ({
+          pinnedRows: [],
+          unpinnedRows: [],
+          totalRoots: 0,
+          hasMoreRoots: false,
+        })}
+        getThreadTime={() => null}
+        isThreadPinned={() => false}
+        isThreadAutoNaming={() => false}
+        onToggleThreadPin={vi.fn()}
+        getPinTimestamp={() => null}
+        onConnectWorkspace={vi.fn()}
+        onShowWorktreeSessionMenu={onShowWorktreeSessionMenu}
+        onQuickReloadWorkspaceThreads={vi.fn()}
+        onSelectWorkspace={vi.fn()}
+        onToggleWorkspaceCollapse={onToggleWorkspaceCollapse}
+        onSelectThread={vi.fn()}
+        onShowThreadMenu={vi.fn()}
+        onShowWorktreeMenu={vi.fn()}
+        onToggleExpanded={vi.fn()}
+        onLoadOlderThreads={vi.fn()}
+      />,
+    );
+
+    const createSessionButton = screen.getByRole("button", {
+      name: /新建会话|New session|New agent|sidebar\.sessionActionsGroup/i,
+    });
+    fireEvent.click(createSessionButton);
+
+    expect(onShowWorktreeSessionMenu).toHaveBeenCalledTimes(1);
+    expect(onShowWorktreeSessionMenu.mock.calls[0]?.[1]).toEqual(worktree);
+    expect(onToggleWorkspaceCollapse).not.toHaveBeenCalled();
+  });
+
+  it("activates the worktree from the explicit main-panel action without toggling collapse", () => {
+    const onSelectWorkspace = vi.fn();
+    const onToggleWorkspaceCollapse = vi.fn();
+
+    render(
+      <WorktreeSection
+        parentWorkspaceId="workspace-1"
+        worktrees={[worktree]}
+        isSectionCollapsed={false}
+        onToggleSectionCollapse={vi.fn()}
+        deletingWorktreeIds={new Set()}
+        threadsByWorkspace={{ [worktree.id]: [] }}
+        threadStatusById={{}}
+        hydratedThreadListWorkspaceIds={new Set()}
+        threadListLoadingByWorkspace={{ [worktree.id]: false }}
+        threadListPagingByWorkspace={{ [worktree.id]: false }}
+        threadListCursorByWorkspace={{ [worktree.id]: null }}
+        expandedWorkspaces={new Set()}
+        activeWorkspaceId={null}
+        activeThreadId={null}
+        getThreadRows={() => ({
+          pinnedRows: [],
+          unpinnedRows: [],
+          totalRoots: 0,
+          hasMoreRoots: false,
+        })}
+        getThreadTime={() => null}
+        isThreadPinned={() => false}
+        isThreadAutoNaming={() => false}
+        onToggleThreadPin={vi.fn()}
+        getPinTimestamp={() => null}
+        onConnectWorkspace={vi.fn()}
+        onShowWorktreeSessionMenu={vi.fn()}
+        onQuickReloadWorkspaceThreads={vi.fn()}
+        onSelectWorkspace={onSelectWorkspace}
+        onToggleWorkspaceCollapse={onToggleWorkspaceCollapse}
+        onSelectThread={vi.fn()}
+        onShowThreadMenu={vi.fn()}
+        onShowWorktreeMenu={vi.fn()}
+        onToggleExpanded={vi.fn()}
+        onLoadOlderThreads={vi.fn()}
+      />,
+    );
+
+    const activateButton = screen.getByRole("button", {
+      name: /切到主区|Open in main panel|sidebar\.activateWorkspace/i,
+    });
+    fireEvent.click(activateButton);
+
+    expect(onSelectWorkspace).toHaveBeenCalledWith("wt-1");
+    expect(onToggleWorkspaceCollapse).not.toHaveBeenCalled();
+  });
+
+  it("shows a degraded refresh action for worktrees only when a reload handler exists", () => {
+    const degradedWorktree: WorkspaceInfo = {
+      ...worktree,
+      id: "wt-degraded",
+      worktree: { branch: "feature/degraded" },
+    };
+
+    const { rerender } = render(
+      <WorktreeSection
+        parentWorkspaceId="workspace-1"
+        worktrees={[degradedWorktree]}
+        isSectionCollapsed={false}
+        onToggleSectionCollapse={vi.fn()}
+        deletingWorktreeIds={new Set()}
+        threadsByWorkspace={{
+          [degradedWorktree.id]: [
+            { id: "thread-1", name: "Alpha", updatedAt: 1000, isDegraded: true },
+          ],
+        }}
+        threadStatusById={{}}
+        hydratedThreadListWorkspaceIds={new Set()}
+        threadListLoadingByWorkspace={{ [degradedWorktree.id]: false }}
+        threadListPagingByWorkspace={{ [degradedWorktree.id]: false }}
+        threadListCursorByWorkspace={{ [degradedWorktree.id]: null }}
+        expandedWorkspaces={new Set()}
+        activeWorkspaceId={null}
+        activeThreadId={null}
+        getThreadRows={() => ({
+          pinnedRows: [],
+          unpinnedRows: [],
+          totalRoots: 1,
+          hasMoreRoots: false,
+        })}
+        getThreadTime={() => null}
+        isThreadPinned={() => false}
+        isThreadAutoNaming={() => false}
+        onToggleThreadPin={vi.fn()}
+        getPinTimestamp={() => null}
+        onConnectWorkspace={vi.fn()}
+        onShowWorktreeSessionMenu={vi.fn()}
+        onQuickReloadWorkspaceThreads={undefined}
+        onSelectWorkspace={vi.fn()}
+        onToggleWorkspaceCollapse={vi.fn()}
+        onSelectThread={vi.fn()}
+        onShowThreadMenu={vi.fn()}
+        onShowWorktreeMenu={vi.fn()}
+        onToggleExpanded={vi.fn()}
+        onLoadOlderThreads={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: /Refresh incomplete thread list/i })).toBeNull();
+
+    rerender(
+      <WorktreeSection
+        parentWorkspaceId="workspace-1"
+        worktrees={[degradedWorktree]}
+        isSectionCollapsed={false}
+        onToggleSectionCollapse={vi.fn()}
+        deletingWorktreeIds={new Set()}
+        threadsByWorkspace={{
+          [degradedWorktree.id]: [
+            { id: "thread-1", name: "Alpha", updatedAt: 1000, isDegraded: true },
+          ],
+        }}
+        threadStatusById={{}}
+        hydratedThreadListWorkspaceIds={new Set()}
+        threadListLoadingByWorkspace={{ [degradedWorktree.id]: false }}
+        threadListPagingByWorkspace={{ [degradedWorktree.id]: false }}
+        threadListCursorByWorkspace={{ [degradedWorktree.id]: null }}
+        expandedWorkspaces={new Set()}
+        activeWorkspaceId={null}
+        activeThreadId={null}
+        getThreadRows={() => ({
+          pinnedRows: [],
+          unpinnedRows: [],
+          totalRoots: 1,
+          hasMoreRoots: false,
+        })}
+        getThreadTime={() => null}
+        isThreadPinned={() => false}
+        isThreadAutoNaming={() => false}
+        onToggleThreadPin={vi.fn()}
+        getPinTimestamp={() => null}
+        onConnectWorkspace={vi.fn()}
+        onShowWorktreeSessionMenu={vi.fn()}
+        onQuickReloadWorkspaceThreads={vi.fn()}
+        onSelectWorkspace={vi.fn()}
+        onToggleWorkspaceCollapse={vi.fn()}
+        onSelectThread={vi.fn()}
+        onShowThreadMenu={vi.fn()}
+        onShowWorktreeMenu={vi.fn()}
+        onToggleExpanded={vi.fn()}
+        onLoadOlderThreads={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", {
+        name: /threads\.degradedWorkspaceRefreshAriaLabel|Refresh incomplete thread list/i,
+      }),
+    ).toBeTruthy();
+  });
+
+  it("splits Windows-style worktree names into prefix and leaf labels", () => {
+    const windowsWorktree: WorkspaceInfo = {
+      ...worktree,
+      id: "wt-win",
+      worktree: { branch: "feature\\windows" },
+    };
+
+    const { container } = render(
+      <WorktreeSection
+        parentWorkspaceId="workspace-1"
+        worktrees={[windowsWorktree]}
+        isSectionCollapsed={false}
+        onToggleSectionCollapse={vi.fn()}
+        deletingWorktreeIds={new Set()}
+        threadsByWorkspace={{ [windowsWorktree.id]: [] }}
+        threadStatusById={{}}
+        hydratedThreadListWorkspaceIds={new Set()}
+        threadListLoadingByWorkspace={{ [windowsWorktree.id]: false }}
+        threadListPagingByWorkspace={{ [windowsWorktree.id]: false }}
+        threadListCursorByWorkspace={{ [windowsWorktree.id]: null }}
+        expandedWorkspaces={new Set()}
+        activeWorkspaceId={null}
+        activeThreadId={null}
+        getThreadRows={() => ({
+          pinnedRows: [],
+          unpinnedRows: [],
+          totalRoots: 0,
+          hasMoreRoots: false,
+        })}
+        getThreadTime={() => null}
+        isThreadPinned={() => false}
+        isThreadAutoNaming={() => false}
+        onToggleThreadPin={vi.fn()}
+        getPinTimestamp={() => null}
+        onConnectWorkspace={vi.fn()}
+        onShowWorktreeSessionMenu={vi.fn()}
+        onQuickReloadWorkspaceThreads={vi.fn()}
+        onSelectWorkspace={vi.fn()}
+        onToggleWorkspaceCollapse={vi.fn()}
+        onSelectThread={vi.fn()}
+        onShowThreadMenu={vi.fn()}
+        onShowWorktreeMenu={vi.fn()}
+        onToggleExpanded={vi.fn()}
+        onLoadOlderThreads={vi.fn()}
+      />,
+    );
+
+    expect(container.querySelector(".worktree-label-prefix")?.textContent).toBe("feature");
+    expect(container.querySelector(".worktree-label")?.textContent).toBe("windows");
   });
 });

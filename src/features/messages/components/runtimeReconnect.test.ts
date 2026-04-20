@@ -25,9 +25,27 @@ describe("resolveRuntimeReconnectHint", () => {
       reason: "thread-not-found",
       rawMessage: "thread not found: 019da207-c1ae-7cb3-9cb6-25f281fbfb30",
     });
+    expect(
+      resolveRuntimeReconnectHint(
+        "Context compaction failed: thread not found: 019da207-c1ae-7cb3-9cb6-25f281fbfb30",
+      ),
+    ).toEqual({
+      reason: "thread-not-found",
+      rawMessage:
+        "Context compaction failed: thread not found: 019da207-c1ae-7cb3-9cb6-25f281fbfb30",
+    });
     expect(resolveRuntimeReconnectHint("会话启动失败： [SESSION_NOT_FOUND] session file not found")).toEqual({
       reason: "thread-not-found",
       rawMessage: "会话启动失败： [SESSION_NOT_FOUND] session file not found",
+    });
+    expect(
+      resolveRuntimeReconnectHint(
+        "会话启动失败： [RUNTIME_RECOVERY_QUARANTINED] Runtime recovery paused for workspace ws-1 (engine codex).",
+      ),
+    ).toEqual({
+      reason: "recovery-quarantined",
+      rawMessage:
+        "会话启动失败： [RUNTIME_RECOVERY_QUARANTINED] Runtime recovery paused for workspace ws-1 (engine codex).",
     });
     expect(resolveRuntimeReconnectHint("request timed out")).toBeNull();
   });

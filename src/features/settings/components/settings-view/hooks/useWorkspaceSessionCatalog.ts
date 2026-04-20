@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   archiveWorkspaceSessions,
   deleteWorkspaceSessions,
+  listGlobalCodexSessions,
+  listProjectRelatedCodexSessions,
   listWorkspaceSessions,
   unarchiveWorkspaceSessions,
   type WorkspaceSessionBatchMutationResponse,
@@ -10,6 +12,8 @@ import {
 } from "../../../../../services/tauri";
 
 export type WorkspaceSessionCatalogStatus = "active" | "archived" | "all";
+export type WorkspaceSessionCatalogMode = "project" | "global";
+export type WorkspaceSessionCatalogSource = "strict" | "related";
 
 export type WorkspaceSessionCatalogFilters = {
   keyword: string;
@@ -33,12 +37,23 @@ export type WorkspaceSessionCatalogMutationResponse = {
   results: WorkspaceSessionCatalogMutationResult[];
 };
 
+type WorkspaceSessionCatalogPageLike = {
+  data?: WorkspaceSessionCatalogEntry[] | null;
+  nextCursor?: string | null;
+  partialSource?: string | null;
+} | null;
+
 type UseWorkspaceSessionCatalogOptions = {
+  mode: WorkspaceSessionCatalogMode;
   workspaceId: string | null;
   filters: WorkspaceSessionCatalogFilters;
+  source?: WorkspaceSessionCatalogSource;
+  enabled?: boolean;
 };
 
 const SESSION_CATALOG_PAGE_SIZE = 100;
+const UNASSIGNED_WORKSPACE_ID = "__global_unassigned__";
+const OWNER_UNRESOLVED_CODE = "OWNER_WORKSPACE_UNRESOLVED";
 
 export function buildWorkspaceSessionSelectionKey(
   entry: Pick<WorkspaceSessionCatalogEntry, "workspaceId" | "sessionId">,
@@ -77,6 +92,20 @@ function toQuery(filters: WorkspaceSessionCatalogFilters): WorkspaceSessionCatal
   };
 }
 
+function normalizeCatalogPage(
+  response: WorkspaceSessionCatalogPageLike,
+): {
+  data: WorkspaceSessionCatalogEntry[];
+  nextCursor: string | null;
+  partialSource: string | null;
+} {
+  return {
+    data: Array.isArray(response?.data) ? response.data : [],
+    nextCursor: response?.nextCursor ?? null,
+    partialSource: response?.partialSource ?? null,
+  };
+}
+
 function patchArchivedState(
   current: WorkspaceSessionCatalogEntry[],
   results: WorkspaceSessionCatalogMutationResponse["results"],
@@ -101,8 +130,11 @@ function patchArchivedState(
 }
 
 export function useWorkspaceSessionCatalog({
+  mode,
   workspaceId,
   filters,
+  source = "strict",
+  enabled = true,
 }: UseWorkspaceSessionCatalogOptions) {
   const [entries, setEntries] = useState<WorkspaceSessionCatalogEntry[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
@@ -116,10 +148,15 @@ export function useWorkspaceSessionCatalog({
   const query = useMemo(() => toQuery(filters), [filters]);
 
   const loadPage = useCallback(
-    async (mode: "replace" | "append", cursor?: string | null) => {
+    async (pageMode: "replace" | "append", cursor?: string | null) => {
       const requestId = requestSeqRef.current + 1;
       requestSeqRef.current = requestId;
-      if (!workspaceId) {
+      const relatedEngineFilteredOut =
+        mode === "project" &&
+        source === "related" &&
+        Boolean(filters.engine) &&
+        filters.engine !== "codex";
+      if (!enabled || relatedEngineFilteredOut || (mode === "project" && !workspaceId)) {
         setEntries([]);
         setNextCursor(null);
         setPartialSource(null);
@@ -129,7 +166,7 @@ export function useWorkspaceSessionCatalog({
         return;
       }
 
-      if (mode === "append") {
+      if (pageMode === "append") {
         setIsLoadingMore(true);
       } else {
         setIsLoading(true);
@@ -137,26 +174,46 @@ export function useWorkspaceSessionCatalog({
       }
 
       try {
-        const response = await listWorkspaceSessions(workspaceId, {
-          query,
-          cursor: cursor ?? null,
-          limit: SESSION_CATALOG_PAGE_SIZE,
-        });
+        const response =
+          mode === "global"
+            ? await listGlobalCodexSessions({
+                query: {
+                  ...query,
+                  engine: "codex",
+                },
+                cursor: cursor ?? null,
+                limit: SESSION_CATALOG_PAGE_SIZE,
+              })
+            : source === "related"
+              ? await listProjectRelatedCodexSessions(workspaceId!, {
+                  query: {
+                    ...query,
+                    engine: "codex",
+                  },
+                  cursor: cursor ?? null,
+                  limit: SESSION_CATALOG_PAGE_SIZE,
+                })
+            : await listWorkspaceSessions(workspaceId!, {
+                query,
+                cursor: cursor ?? null,
+                limit: SESSION_CATALOG_PAGE_SIZE,
+              });
         if (requestSeqRef.current !== requestId) {
           return;
         }
+        const page = normalizeCatalogPage(response);
         setEntries((current) =>
-          mode === "append" ? [...current, ...response.data] : response.data,
+          pageMode === "append" ? [...current, ...page.data] : page.data,
         );
-        setNextCursor(response.nextCursor ?? null);
-        setPartialSource(response.partialSource ?? null);
+        setNextCursor(page.nextCursor);
+        setPartialSource(page.partialSource);
         setError(null);
       } catch (incomingError) {
         if (requestSeqRef.current !== requestId) {
           return;
         }
         const message = normalizeErrorMessage(incomingError);
-        if (mode !== "append") {
+        if (pageMode !== "append") {
           setEntries([]);
           setNextCursor(null);
           setPartialSource(null);
@@ -169,7 +226,7 @@ export function useWorkspaceSessionCatalog({
         }
       }
     },
-    [query, workspaceId],
+    [enabled, filters.engine, mode, query, source, workspaceId],
   );
 
   useEffect(() => {
@@ -192,7 +249,7 @@ export function useWorkspaceSessionCatalog({
       kind: MutationKind,
       selectedEntries: WorkspaceSessionCatalogEntry[],
     ): Promise<WorkspaceSessionCatalogMutationResponse> => {
-      if (!workspaceId) {
+      if (mode === "project" && !workspaceId) {
         throw new Error("workspace_id is required");
       }
       if (selectedEntries.length === 0) {
@@ -202,13 +259,26 @@ export function useWorkspaceSessionCatalog({
       setIsMutating(true);
       try {
         const entriesByWorkspaceId = new Map<string, WorkspaceSessionCatalogEntry[]>();
+        const unresolvedEntries: WorkspaceSessionCatalogMutationResult[] = [];
         selectedEntries.forEach((entry) => {
+          if (entry.workspaceId === UNASSIGNED_WORKSPACE_ID) {
+            unresolvedEntries.push({
+              selectionKey: buildWorkspaceSessionSelectionKey(entry),
+              sessionId: entry.sessionId,
+              workspaceId: entry.workspaceId,
+              ok: false,
+              archivedAt: null,
+              error: "Owner workspace could not be resolved for this session.",
+              code: OWNER_UNRESOLVED_CODE,
+            });
+            return;
+          }
           const bucket = entriesByWorkspaceId.get(entry.workspaceId) ?? [];
           bucket.push(entry);
           entriesByWorkspaceId.set(entry.workspaceId, bucket);
         });
 
-        const mutationResults: WorkspaceSessionCatalogMutationResult[] = [];
+        const mutationResults: WorkspaceSessionCatalogMutationResult[] = [...unresolvedEntries];
         for (const [entryWorkspaceId, entryBucket] of entriesByWorkspaceId) {
           const sessionIds = entryBucket.map((entry) => entry.sessionId);
           const selectionKeyBySessionId = new Map(
@@ -287,7 +357,7 @@ export function useWorkspaceSessionCatalog({
         setIsMutating(false);
       }
     },
-    [filters.status, workspaceId],
+    [filters.status, mode, workspaceId],
   );
 
   return {

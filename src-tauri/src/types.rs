@@ -370,6 +370,8 @@ pub(crate) struct LocalUsageSessionSummary {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) session_id_aliases: Vec<String>,
     pub(crate) timestamp: i64,
+    #[serde(default)]
+    pub(crate) cwd: Option<String>,
     pub(crate) model: String,
     pub(crate) usage: LocalUsageUsageData,
     pub(crate) cost: f64,

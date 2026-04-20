@@ -10,9 +10,6 @@ const CODEX_BACKGROUND_HELPER_PROMPT_PREFIXES = [
   "Generate a concise title for a coding chat thread from the first user message.",
   "You create concise run metadata for a coding task.",
   "You are generating OpenSpec project context.",
-  "请生成一次提交（commit）信息，提交信息需遵循 Conventional Commits 规范，并且全部使用中文。",
-  "Please generate a commit message. The commit message must follow the Conventional Commits specification and be written entirely in English.",
-  "Generate a concise git commit message for the following changes.",
 ] as const;
 
 type MessageConversationItem = Extract<ConversationItem, { kind: "message" }>;
@@ -24,6 +21,16 @@ export type GeminiSessionSummary = {
   firstMessage: string;
   updatedAt: number;
   fileSizeBytes?: number;
+};
+
+export type CodexCatalogSessionSummary = {
+  sessionId: string;
+  title: string;
+  updatedAt: number;
+  sizeBytes?: number;
+  source?: string | null;
+  provider?: string | null;
+  sourceLabel?: string | null;
 };
 
 export function isWorkspaceNotConnectedError(error: unknown): boolean {
@@ -80,48 +87,11 @@ export function selectReplacementThreadSummary(params: {
   summaries: ThreadSummary[];
   staleSummary?: ThreadSummary;
 }): ThreadSummary | null {
-  const { staleThreadId, summaries } = params;
-  const staleSummary =
-    params.staleSummary ?? summaries.find((entry) => entry.id === staleThreadId);
-  const staleEngine = inferThreadEngineSource(staleThreadId, staleSummary);
-  const staleName = staleSummary?.name?.trim() ?? "";
-  const candidates = summaries.filter((entry) => {
-    if (!entry.id || entry.id === staleThreadId) {
-      return false;
-    }
-    if (entry.threadKind === "shared" || isPendingThreadId(entry.id)) {
-      return false;
-    }
-    return inferThreadEngineSource(entry.id, entry) === staleEngine;
-  });
+  const candidates = listReplacementThreadCandidates(params);
   if (candidates.length === 0) {
     return null;
   }
-  const scored = candidates
-    .map((entry) => {
-      let score = 0;
-      if (staleName && entry.name.trim() === staleName) {
-        score += 100;
-      }
-      if (staleSummary?.source && entry.source && staleSummary.source === entry.source) {
-        score += 20;
-      }
-      if (
-        staleSummary?.provider &&
-        entry.provider &&
-        staleSummary.provider === entry.provider
-      ) {
-        score += 20;
-      }
-      if (
-        staleSummary?.sourceLabel &&
-        entry.sourceLabel &&
-        staleSummary.sourceLabel === entry.sourceLabel
-      ) {
-        score += 20;
-      }
-      return { entry, score };
-    })
+  const scored = scoreReplacementThreadCandidates(params)
     .sort((left, right) => {
       if (right.score !== left.score) {
         return right.score - left.score;
@@ -138,6 +108,275 @@ export function selectReplacementThreadSummary(params: {
   }
   if (candidates.length === 1) {
     return candidates[0] ?? null;
+  }
+  return null;
+}
+
+function scoreReplacementThreadCandidate(
+  entry: ThreadSummary,
+  staleSummary?: ThreadSummary,
+): number {
+  const staleName = staleSummary?.name?.trim() ?? "";
+  let score = 0;
+  if (staleName && entry.name.trim() === staleName) {
+    score += 100;
+  }
+  if (staleSummary?.source && entry.source && staleSummary.source === entry.source) {
+    score += 20;
+  }
+  if (
+    staleSummary?.provider &&
+    entry.provider &&
+    staleSummary.provider === entry.provider
+  ) {
+    score += 20;
+  }
+  if (
+    staleSummary?.sourceLabel &&
+    entry.sourceLabel &&
+    staleSummary.sourceLabel === entry.sourceLabel
+  ) {
+    score += 20;
+  }
+  return score;
+}
+
+export function listReplacementThreadCandidates(params: {
+  staleThreadId: string;
+  summaries: ThreadSummary[];
+  staleSummary?: ThreadSummary;
+}): ThreadSummary[] {
+  const { staleThreadId, summaries } = params;
+  const staleSummary =
+    params.staleSummary ?? summaries.find((entry) => entry.id === staleThreadId);
+  const staleEngine = inferThreadEngineSource(staleThreadId, staleSummary);
+  return summaries.filter((entry) => {
+    if (!entry.id || entry.id === staleThreadId) {
+      return false;
+    }
+    if (entry.threadKind === "shared" || isPendingThreadId(entry.id)) {
+      return false;
+    }
+    return inferThreadEngineSource(entry.id, entry) === staleEngine;
+  });
+}
+
+export function scoreReplacementThreadCandidates(params: {
+  staleThreadId: string;
+  summaries: ThreadSummary[];
+  staleSummary?: ThreadSummary;
+}): Array<{ entry: ThreadSummary; score: number }> {
+  const staleSummary =
+    params.staleSummary ??
+    params.summaries.find((entry) => entry.id === params.staleThreadId);
+  return listReplacementThreadCandidates(params).map((entry) => ({
+    entry,
+    score: scoreReplacementThreadCandidate(entry, staleSummary),
+  }));
+}
+
+const THREAD_RECOVERY_PATTERNS = [
+  "thread not found",
+  "[session_not_found]",
+  "session not found",
+  "session file not found",
+] as const;
+
+const THREAD_RECOVERY_ERROR_PREFIXES = [
+  "会话启动失败",
+  "thread not found",
+  "session not found",
+  "session file not found",
+  "[session_not_found]",
+  "failed to start",
+  "turn failed to start",
+  "session failed to start",
+  "error: thread not found",
+  "error: session not found",
+] as const;
+
+const RUNTIME_PIPE_DISCONNECT_PATTERNS = [
+  "broken pipe",
+  "the pipe is being closed",
+  "the pipe has been ended",
+  "os error 32",
+  "os error 109",
+  "os error 232",
+] as const;
+
+function lineLooksLikeThreadRecoveryError(line: string): boolean {
+  const lowered = line.toLowerCase();
+  if (!THREAD_RECOVERY_PATTERNS.some((pattern) => lowered.includes(pattern))) {
+    return false;
+  }
+  return THREAD_RECOVERY_ERROR_PREFIXES.some((prefix) => lowered.startsWith(prefix));
+}
+
+function lineLooksLikeRuntimeReconnectError(line: string): boolean {
+  const lowered = line.toLowerCase();
+  return (
+    RUNTIME_PIPE_DISCONNECT_PATTERNS.some((pattern) => lowered.includes(pattern)) ||
+    lowered.includes("workspace not connected") ||
+    lineLooksLikeThreadRecoveryError(line)
+  );
+}
+
+function getRuntimeReconnectCandidate(text: string): string | null {
+  const normalized = text.trim();
+  if (!normalized) {
+    return null;
+  }
+  const lines = normalized
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (lines.length === 0) {
+    return null;
+  }
+  if (lines.length === 1) {
+    return lineLooksLikeRuntimeReconnectError(lines[0] ?? "") ? (lines[0] ?? null) : null;
+  }
+  if (!lines.every((line) => lineLooksLikeRuntimeReconnectError(line))) {
+    return null;
+  }
+  return lines[0] ?? null;
+}
+
+function isTransientReconnectAssistantMessage(item: ConversationItem): boolean {
+  if (item.kind !== "message" || item.role !== "assistant") {
+    return false;
+  }
+  return getRuntimeReconnectCandidate(item.text) !== null;
+}
+
+function normalizeComparableRecoveryMessageText(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
+
+function buildComparableRecoveryMessageSignature(
+  item: Extract<ConversationItem, { kind: "message" }>,
+): string {
+  const images = Array.isArray(item.images) ? item.images.join("\u0001") : "";
+  return [
+    item.role,
+    normalizeComparableRecoveryMessageText(item.text),
+    images,
+  ].join("\u0000");
+}
+
+function collectComparableRecoveryMessageSequence(items: ConversationItem[]): string[] {
+  return items
+    .filter(
+      (
+        item,
+      ): item is Extract<ConversationItem, { kind: "message" }> =>
+        item.kind === "message" && !isTransientReconnectAssistantMessage(item),
+    )
+    .map(buildComparableRecoveryMessageSignature)
+    .filter(Boolean);
+}
+
+function isComparableMessageSequencePrefix(prefix: string[], target: string[]): boolean {
+  if (prefix.length === 0 || prefix.length > target.length) {
+    return false;
+  }
+  return prefix.every((value, index) => value === target[index]);
+}
+
+function countComparableMessageSuffixOverlap(left: string[], right: string[]): number {
+  const maxLength = Math.min(left.length, right.length);
+  let overlap = 0;
+  while (overlap < maxLength) {
+    const leftIndex = left.length - 1 - overlap;
+    const rightIndex = right.length - 1 - overlap;
+    if (left[leftIndex] !== right[rightIndex]) {
+      break;
+    }
+    overlap += 1;
+  }
+  return overlap;
+}
+
+function extractComparableRecoveryUserSequence(sequence: string[]): string[] {
+  return sequence.filter((signature) => signature.startsWith("user\u0000"));
+}
+
+function scoreThreadRecoveryCandidateByMessages(
+  staleItems: ConversationItem[],
+  candidateItems: ConversationItem[],
+): number {
+  const staleSequence = collectComparableRecoveryMessageSequence(staleItems);
+  const candidateSequence = collectComparableRecoveryMessageSequence(candidateItems);
+  if (staleSequence.length === 0 || candidateSequence.length === 0) {
+    return 0;
+  }
+  if (
+    staleSequence.length === candidateSequence.length &&
+    staleSequence.every((value, index) => value === candidateSequence[index])
+  ) {
+    return 4_000 + staleSequence.length;
+  }
+  if (isComparableMessageSequencePrefix(staleSequence, candidateSequence)) {
+    return 3_000 + staleSequence.length;
+  }
+  if (isComparableMessageSequencePrefix(candidateSequence, staleSequence)) {
+    return 2_500 + candidateSequence.length;
+  }
+  const messageSuffixOverlap = countComparableMessageSuffixOverlap(
+    staleSequence,
+    candidateSequence,
+  );
+  if (messageSuffixOverlap >= 2) {
+    return 2_000 + messageSuffixOverlap;
+  }
+  const staleUserSequence = extractComparableRecoveryUserSequence(staleSequence);
+  const candidateUserSequence = extractComparableRecoveryUserSequence(candidateSequence);
+  if (
+    staleUserSequence.length > 0 &&
+    staleUserSequence.length === candidateUserSequence.length &&
+    staleUserSequence.every((value, index) => value === candidateUserSequence[index])
+  ) {
+    return 1_500 + staleUserSequence.length;
+  }
+  if (isComparableMessageSequencePrefix(staleUserSequence, candidateUserSequence)) {
+    return 1_000 + staleUserSequence.length;
+  }
+  const userSuffixOverlap = countComparableMessageSuffixOverlap(
+    staleUserSequence,
+    candidateUserSequence,
+  );
+  if (userSuffixOverlap >= 1) {
+    return 500 + userSuffixOverlap;
+  }
+  return 0;
+}
+
+export function selectReplacementThreadByMessageHistory(params: {
+  staleItems: ConversationItem[];
+  candidates: Array<{
+    summary: ThreadSummary;
+    items: ConversationItem[];
+  }>;
+}): ThreadSummary | null {
+  const scored = params.candidates
+    .map(({ summary, items }) => ({
+      entry: summary,
+      score: scoreThreadRecoveryCandidateByMessages(params.staleItems, items),
+    }))
+    .filter((entry) => entry.score > 0)
+    .sort((left, right) => {
+      if (right.score !== left.score) {
+        return right.score - left.score;
+      }
+      return right.entry.updatedAt - left.entry.updatedAt;
+    });
+  const best = scored[0];
+  const next = scored[1];
+  if (!best) {
+    return null;
+  }
+  if (!next || next.score < best.score) {
+    return best.entry;
   }
   return null;
 }
@@ -370,6 +609,51 @@ export function mergeGeminiSessionSummaries(
     };
     if (!prev || next.updatedAt >= prev.updatedAt) {
       mergedById.set(id, next);
+    }
+  });
+  return Array.from(mergedById.values()).sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
+export function mergeCodexCatalogSessionSummaries(
+  baseSummaries: ThreadSummary[],
+  codexSessions: CodexCatalogSessionSummary[],
+  workspaceId: string,
+  mappedTitles: Record<string, string>,
+  getCustomName: (workspaceId: string, threadId: string) => string | undefined,
+): ThreadSummary[] {
+  if (codexSessions.length === 0) {
+    return baseSummaries;
+  }
+  const mergedById = new Map<string, ThreadSummary>();
+  baseSummaries.forEach((entry) => mergedById.set(entry.id, entry));
+  codexSessions.forEach((session) => {
+    const title = session.title.trim();
+    if (
+      !title ||
+      CODEX_BACKGROUND_HELPER_PROMPT_PREFIXES.some((prefix) => title.startsWith(prefix))
+    ) {
+      return;
+    }
+    const prev = mergedById.get(session.sessionId);
+    const updatedAt = Number.isFinite(session.updatedAt)
+      ? Math.max(0, session.updatedAt)
+      : 0;
+    const next: ThreadSummary = {
+      id: session.sessionId,
+      name:
+        mappedTitles[session.sessionId] ||
+        getCustomName(workspaceId, session.sessionId) ||
+        previewThreadName(title, "Codex Session"),
+      updatedAt,
+      sizeBytes: session.sizeBytes,
+      engineSource: "codex",
+      threadKind: "native",
+      source: session.source ?? undefined,
+      provider: session.provider ?? undefined,
+      sourceLabel: session.sourceLabel ?? undefined,
+    };
+    if (!prev || next.updatedAt >= prev.updatedAt) {
+      mergedById.set(session.sessionId, next);
     }
   });
   return Array.from(mergedById.values()).sort((a, b) => b.updatedAt - a.updatedAt);

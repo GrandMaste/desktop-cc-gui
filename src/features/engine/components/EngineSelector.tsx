@@ -130,7 +130,9 @@ export function EngineSelector({
         {engineList.map((engine) => {
           const statusKey = getEngineAvailabilityStatusKey(engineList, engine.type);
           const statusText = statusKey ? t(statusKey) : "";
-          const versionLabel = formatEngineVersionLabel(engine);
+          const versionLabel = engine.availabilityState === "loading"
+            ? null
+            : formatEngineVersionLabel(engine);
 
           return (
             <SelectItem
@@ -143,7 +145,7 @@ export function EngineSelector({
                 <span className="composer-inline-select-item-label">
                   {engine.displayName}
                   {versionLabel ? ` (${versionLabel})` : ""}
-                  {statusText ? ` - ${statusText}` : ""}
+                  {statusText ? `（${statusText}）` : ""}
                 </span>
               </span>
             </SelectItem>

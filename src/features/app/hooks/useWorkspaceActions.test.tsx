@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { act, renderHook } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorkspaceInfo } from "../../../types";
 import { useWorkspaceActions } from "./useWorkspaceActions";
 import { ask } from "@tauri-apps/plugin-dialog";
@@ -8,7 +8,18 @@ import { openNewWindow, pickWorkspacePath } from "../../../services/tauri";
 
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
-    t: (key: string) => key,
+    t: (key: string, options?: Record<string, unknown>) => {
+      switch (key) {
+        case "workspace.loadingProgressCreateSessionMessage":
+          return `create:${String(options?.engine ?? "")}:${String(options?.workspace ?? "")}`;
+        case "workspace.loadingProgressAddProjectMessage":
+          return `add:${String(options?.project ?? "")}`;
+        case "workspace.loadingProgressOpenProjectMessage":
+          return `open:${String(options?.project ?? "")}`;
+        default:
+          return key;
+      }
+    },
   }),
 }));
 
@@ -50,6 +61,8 @@ function makeOptions(overrides?: Partial<Parameters<typeof useWorkspaceActions>[
     openWorktreePrompt: vi.fn(),
     openClonePrompt: vi.fn(),
     composerInputRef: { current: null },
+    showLoadingProgressDialog: vi.fn(() => "loading-1"),
+    hideLoadingProgressDialog: vi.fn(),
     onDebug: vi.fn(),
     ...overrides,
   };
@@ -58,6 +71,11 @@ function makeOptions(overrides?: Partial<Parameters<typeof useWorkspaceActions>[
 describe("useWorkspaceActions", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.stubGlobal("alert", vi.fn());
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it("uses selected engine for new session and switches active engine first", async () => {
@@ -76,6 +94,11 @@ describe("useWorkspaceActions", () => {
     expect(options.startThreadForWorkspace).toHaveBeenCalledWith("ws-1", {
       engine: "codex",
     });
+    expect(options.showLoadingProgressDialog).toHaveBeenCalledWith({
+      title: "workspace.loadingProgressCreateSessionTitle",
+      message: "create:workspace.engineCodex:Workspace",
+    });
+    expect(options.hideLoadingProgressDialog).toHaveBeenCalledWith("loading-1");
   });
 
   it("falls back to current active engine when no explicit engine provided", async () => {
@@ -91,6 +114,7 @@ describe("useWorkspaceActions", () => {
     expect(options.startThreadForWorkspace).toHaveBeenCalledWith("ws-1", {
       engine: "opencode",
     });
+    expect(options.hideLoadingProgressDialog).toHaveBeenCalledWith("loading-1");
   });
 
   it("adds workspace to current window when open mode is current", async () => {
@@ -113,6 +137,11 @@ describe("useWorkspaceActions", () => {
 
     expect(options.addWorkspaceFromPath).toHaveBeenCalledWith("/tmp/new-repo");
     expect(openNewWindow).not.toHaveBeenCalled();
+    expect(options.showLoadingProgressDialog).toHaveBeenCalledWith({
+      title: "workspace.loadingProgressAddProjectTitle",
+      message: "add:new-repo",
+    });
+    expect(options.hideLoadingProgressDialog).toHaveBeenCalledWith("loading-1");
   });
 
   it("opens new window when mode is new-window", async () => {
@@ -127,6 +156,11 @@ describe("useWorkspaceActions", () => {
 
     expect(openNewWindow).toHaveBeenCalledWith("/tmp/new-repo");
     expect(options.addWorkspaceFromPath).not.toHaveBeenCalled();
+    expect(options.showLoadingProgressDialog).toHaveBeenCalledWith({
+      title: "workspace.loadingProgressOpenProjectTitle",
+      message: "open:new-repo",
+    });
+    expect(options.hideLoadingProgressDialog).toHaveBeenCalledWith("loading-1");
   });
 
   it("asks user for mode once on each add workspace flow", async () => {
@@ -141,5 +175,47 @@ describe("useWorkspaceActions", () => {
 
     expect(ask).toHaveBeenCalledTimes(1);
     expect(openNewWindow).toHaveBeenCalledWith("/tmp/new-repo");
+  });
+
+  it("extracts the project name from Windows paths when showing progress copy", async () => {
+    vi.mocked(pickWorkspacePath).mockResolvedValue("C:\\Users\\chen\\code\\mossx");
+    vi.mocked(ask).mockResolvedValueOnce(true);
+    const options = makeOptions({
+      addWorkspaceFromPath: vi.fn(async () => ({
+        id: "ws-2",
+        name: "",
+        path: "C:\\Users\\chen\\code\\mossx",
+        connected: true,
+        settings: { sidebarCollapsed: false },
+      })),
+    });
+    const { result } = renderHook(() => useWorkspaceActions(options));
+
+    await act(async () => {
+      await result.current.handleAddWorkspace();
+    });
+
+    expect(options.showLoadingProgressDialog).toHaveBeenCalledWith({
+      title: "workspace.loadingProgressAddProjectTitle",
+      message: "add:mossx",
+    });
+  });
+
+  it("surfaces session creation failures when no thread id is returned", async () => {
+    const options = makeOptions({
+      isCompact: true,
+      startThreadForWorkspace: vi.fn(async () => null),
+    });
+    const { result } = renderHook(() => useWorkspaceActions(options));
+
+    await act(async () => {
+      await result.current.handleAddAgent(baseWorkspace, "claude");
+    });
+
+    expect(window.alert).toHaveBeenCalledWith(
+      "errors.failedToCreateSession\n\nerrors.failedToCreateSessionNoThreadId",
+    );
+    expect(options.setActiveTab).not.toHaveBeenCalled();
+    expect(options.hideLoadingProgressDialog).toHaveBeenCalledWith("loading-1");
   });
 });

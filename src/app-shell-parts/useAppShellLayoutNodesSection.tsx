@@ -28,7 +28,7 @@ export function useAppShellLayoutNodesSection(ctx: any) {
     editorHighlightTarget, editorNavigationTarget, editorSplitLayout, effectiveModels, effectiveReasoningSupported, effectiveRuntimeMode, effectiveSelectedModel, effectiveSelectedModelId,
     effectiveUiMode, engineModelsAsOptions, engineSelectedModelIdByType, engineSelection, engineStatuses, ensureLaunchTerminal, ensureTerminalWithTitle, ensureWorkspaceThreadListLoaded,
     entry, errorToasts, existing, exitDiffView, expandRightPanel, expandSidebar, filePanelMode, filePassword,
-    fileReferenceMode, fileStatus, files, finishedByAgentUpdate, finishedByDuration, firstAnswer, flushDraggedHeight, force,
+    fileReferenceMode, fileStatus, fileTreeLoadError, files, finishedByAgentUpdate, finishedByDuration, firstAnswer, flushDraggedHeight, force,
     forkThreadForWorkspace, getGlobalPromptsDir, getPinTimestamp, getThreadRows, getWorkspaceGroupName, getWorkspacePromptsDir, gitCommitDiffs, gitDiffListView,
     gitDiffViewStyle, gitHistoryPanelHeight, gitHistoryPanelHeightRef, gitIssues, gitIssuesError, gitIssuesLoading, gitIssuesTotal, gitLogAhead,
     gitLogAheadEntries, gitLogBehind, gitLogBehindEntries, gitLogEntries, gitLogError, gitLogLoading, gitLogTotal, gitLogUpstream,
@@ -52,7 +52,7 @@ export function useAppShellLayoutNodesSection(ctx: any) {
     handleSync, handleTestNotificationSound, handleToggleDictation, handleToggleRuntimeConsole, handleToggleSearchContentFilter, handleToggleSearchPalette, handleToggleTerminal, handleToggleTerminalPanel,
     handleUnlockPanel, handleUnstageGitFile, handleUpdatePrompt, handleUserInputSubmit, handleUserInputSubmitWithPlanApply, handleExitPlanModeExecute, handleWorkspaceDragEnter, handleWorkspaceDragLeave, handleWorkspaceDragOver,
     handleWorkspaceDrop, handleWorktreeCreated, hasActivePlan, hasLoaded, hasPlanData, highlightedBranchIndex, highlightedCommitIndex, highlightedPresetIndex,
-    historySearchItems, hydratedThreadListWorkspaceIdsRef, installedEngines, interruptTurn, isCompact, isDeleteThreadPromptBusy, isEditorFileMaximized, isFilesLoading,
+    availableEngines, historySearchItems, hydratedThreadListWorkspaceIdsRef, installedEngines, interruptTurn, isCompact, isDeleteThreadPromptBusy, isEditorFileMaximized, isFilesLoading,
     isLoadingLatestAgents, isMacDesktop, isPanelLocked, isPhone, isPlanMode, isPlanPanelDismissed, isProcessing, isProcessingNow,
     isPullRequestComposer, isPullRequestComposerFromSections, isReviewing, isSearchPaletteOpen, isSoloMode, isTablet, isThreadAutoNaming, isThreadPinned,
     isValid, isWindowsDesktop, isWorkspaceDropActive, isWorktreeWorkspace, kanbanConversationWidth, kanbanCreatePanel, kanbanCreateTask, kanbanDeletePanel,
@@ -170,6 +170,7 @@ export function useAppShellLayoutNodesSection(ctx: any) {
     threadStatusById,
     runningSessionCountByWorkspaceId,
     recentCompletedSessionCountByWorkspaceId,
+    hydratedThreadListWorkspaceIds: hydratedThreadListWorkspaceIdsRef.current,
     threadListLoadingByWorkspace,
     threadListPagingByWorkspace,
     threadListCursorByWorkspace,
@@ -213,9 +214,7 @@ export function useAppShellLayoutNodesSection(ctx: any) {
       }
       const recoveredThreadId = await refreshThread(workspaceId, threadId);
       const targetThreadId =
-        typeof recoveredThreadId === "string" && recoveredThreadId.trim()
-          ? recoveredThreadId
-          : threadId;
+        typeof recoveredThreadId === "string" ? recoveredThreadId.trim() : "";
       const nextText = message.text.trim();
       const nextImages = message.images ?? [];
       if (!targetThreadId || (!nextText && nextImages.length === 0)) {
@@ -265,6 +264,7 @@ export function useAppShellLayoutNodesSection(ctx: any) {
       }
     },
     onAddAgent: handleAddAgent,
+    engineOptions: availableEngines,
     onAddSharedAgent: handleStartSharedConversation,
     onAddWorktreeAgent: handleAddWorktreeAgent,
     onAddCloneAgent: handleAddCloneAgent,
@@ -373,6 +373,17 @@ export function useAppShellLayoutNodesSection(ctx: any) {
       }
       void loadOlderThreadsForWorkspace(workspace);
     },
+    onQuickReloadWorkspaceThreads: (workspaceId) => {
+      const workspace = workspacesById.get(workspaceId);
+      if (!workspace) {
+        return;
+      }
+      const targets =
+        workspace.kind === "main"
+          ? [workspace, ...workspaces.filter((candidate) => candidate.parentId === workspace.id)]
+          : [workspace];
+      void Promise.allSettled(targets.map((target) => listThreadsForWorkspaceTracked(target)));
+    },
     onReloadWorkspaceThreads: async (workspaceId) => {
       const workspace = workspacesById.get(workspaceId);
       if (!workspace) {
@@ -397,7 +408,11 @@ export function useAppShellLayoutNodesSection(ctx: any) {
       if (!confirmed) {
         return;
       }
-      void listThreadsForWorkspaceTracked(workspace);
+      const targets =
+        workspace.kind === "main"
+          ? [workspace, ...workspaces.filter((candidate) => candidate.parentId === workspace.id)]
+          : [workspace];
+      void Promise.allSettled(targets.map((target) => listThreadsForWorkspaceTracked(target)));
     },
     updaterState,
     onUpdate: startUpdate,
@@ -455,6 +470,7 @@ export function useAppShellLayoutNodesSection(ctx: any) {
       setLiveEditPreviewEnabled((current) => !current);
     },
     fileTreeLoading: isFilesLoading,
+    fileTreeLoadError,
     onRefreshFiles: refreshFiles,
     onOpenDetachedFileExplorer: handleOpenDetachedFileExplorer,
     onToggleRuntimeConsole: handleToggleRuntimeConsole,
@@ -647,7 +663,7 @@ export function useAppShellLayoutNodesSection(ctx: any) {
     collaborationModesEnabled,
     selectedCollaborationModeId,
     onSelectCollaborationMode: applySelectedCollaborationMode,
-    engines: installedEngines,
+    engines: availableEngines,
     selectedEngine: activeEngine,
     usePresentationProfile: appSettings.chatCanvasUsePresentationProfile,
     onSelectEngine: handleSelectConversationEngine,

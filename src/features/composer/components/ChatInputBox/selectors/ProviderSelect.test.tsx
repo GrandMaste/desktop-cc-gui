@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { fireEvent, render } from '@testing-library/react';
+import { fireEvent, render, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { ProviderSelect } from './ProviderSelect';
 
@@ -63,5 +63,48 @@ describe('ProviderSelect', () => {
     fireEvent.click(options[1] as HTMLElement);
 
     expect(onChange).toHaveBeenCalledWith('codex');
+  });
+
+  it('shows disabled provider status label in quick selector dropdown', () => {
+    const { container } = render(
+      <ProviderSelect
+        value="claude"
+        onChange={vi.fn()}
+        iconOnly
+        providerAvailability={{ codex: false }}
+        providerStatusLabels={{ codex: '检测中...' }}
+      />,
+    );
+
+    const trigger = container.querySelector('.selector-provider-button') as HTMLElement;
+    fireEvent.click(trigger);
+
+    const dropdown = container.querySelector('.selector-dropdown');
+    expect(dropdown?.textContent).toContain('检测中...');
+  });
+
+  it('shows disabled message instead of generic feature-coming-soon toast', async () => {
+    const onChange = vi.fn();
+    const { container } = render(
+      <ProviderSelect
+        value="claude"
+        onChange={onChange}
+        iconOnly
+        providerAvailability={{ codex: false }}
+        providerStatusLabels={{ codex: '检测中...' }}
+        providerDisabledMessages={{ codex: '检测中...' }}
+      />,
+    );
+
+    const trigger = container.querySelector('.selector-provider-button') as HTMLElement;
+    fireEvent.click(trigger);
+
+    const codexOption = container.querySelectorAll('.selector-option')[1] as HTMLElement;
+    fireEvent.click(codexOption);
+
+    await waitFor(() => {
+      expect(container.querySelector('.selector-toast')?.textContent).toContain('检测中...');
+    });
+    expect(onChange).not.toHaveBeenCalled();
   });
 });

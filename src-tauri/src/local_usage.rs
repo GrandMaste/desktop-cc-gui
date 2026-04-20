@@ -193,6 +193,32 @@ pub(crate) async fn list_codex_session_summaries_for_workspace(
     Ok((workspace_path_str, sessions))
 }
 
+pub(crate) async fn list_global_codex_session_summaries(
+    workspaces: &Mutex<HashMap<String, WorkspaceEntry>>,
+    limit: usize,
+) -> Result<Vec<LocalUsageSessionSummary>, String> {
+    let requested_limit = limit.max(1);
+    let sessions_roots = {
+        let workspaces = workspaces.lock().await;
+        resolve_sessions_roots(&workspaces, None)
+    };
+    let sessions = timeout(
+        LOCAL_SESSION_SCAN_TIMEOUT,
+        tokio::task::spawn_blocking(move || {
+            let mut summaries = scan_codex_session_summaries(None, &sessions_roots)?;
+            if summaries.len() > requested_limit {
+                summaries.truncate(requested_limit);
+            }
+            Ok::<Vec<LocalUsageSessionSummary>, String>(summaries)
+        }),
+    )
+    .await
+    .map_err(|_| "global codex session scan timed out".to_string())?
+    .map_err(|err| err.to_string())??;
+
+    Ok(sessions)
+}
+
 #[tauri::command]
 pub(crate) async fn list_codex_session_summaries(
     workspace_id: String,
@@ -220,7 +246,7 @@ pub(crate) async fn load_codex_session(
     if session_id.is_empty() {
         return Err("session_id is required".to_string());
     }
-    if session_id.contains('/') || session_id.contains('\\') || session_id.contains("..") {
+    if is_invalid_session_path_segment(&session_id) {
         return Err("invalid session_id".to_string());
     }
 
@@ -249,6 +275,13 @@ pub(crate) async fn load_codex_session(
         "sessionId": session_id,
         "entries": entries,
     }))
+}
+
+pub(super) fn is_invalid_session_path_segment(session_id: &str) -> bool {
+    session_id == "."
+        || session_id.contains('/')
+        || session_id.contains('\\')
+        || session_id.contains("..")
 }
 
 fn find_codex_session_file(
@@ -781,6 +814,7 @@ fn parse_codex_session_summary(
     let mut model: Option<String> = None;
     let mut source: Option<String> = None;
     let mut provider: Option<String> = None;
+    let mut cwd: Option<String> = None;
     let mut canonical_session_id: Option<String> = None;
     let mut latest_timestamp = 0_i64;
     let mut previous_totals: Option<UsageTotals> = None;
@@ -871,9 +905,12 @@ fn parse_codex_session_summary(
             if canonical_session_id.is_none() {
                 canonical_session_id = extract_session_id_from_session_value(&value);
             }
-            if let Some(cwd) = extract_cwd(&value) {
+            if let Some(detected_cwd) = extract_cwd(&value) {
+                if cwd.is_none() {
+                    cwd = Some(detected_cwd.clone());
+                }
                 if let Some(filter) = workspace_path {
-                    matches_workspace = path_matches_workspace(&cwd, filter);
+                    matches_workspace = path_matches_workspace(&detected_cwd, filter);
                     match_known = true;
                     if !matches_workspace {
                         break;
@@ -1065,6 +1102,7 @@ fn parse_codex_session_summary(
         session_id,
         session_id_aliases,
         timestamp,
+        cwd,
         model,
         usage,
         cost,
@@ -1813,6 +1851,7 @@ fn parse_gemini_session_summary(path: &Path) -> Result<Option<LocalUsageSessionS
         session_id,
         session_id_aliases: Vec::new(),
         timestamp,
+        cwd: None,
         model,
         usage,
         cost,
@@ -2033,6 +2072,7 @@ fn parse_claude_session_summary(path: &Path) -> Result<Option<LocalUsageSessionS
         session_id,
         session_id_aliases: Vec::new(),
         timestamp,
+        cwd: None,
         model,
         usage,
         cost: total_cost,
@@ -2483,7 +2523,7 @@ fn posix_path_is_same_or_child(candidate: &str, base: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn path_matches_workspace(cwd: &str, workspace_path: &Path) -> bool {
+pub(crate) fn path_matches_workspace(cwd: &str, workspace_path: &Path) -> bool {
     #[cfg(windows)]
     {
         let cwd_path = normalize_workspace_match_path(cwd);
@@ -2541,15 +2581,27 @@ fn resolve_codex_sessions_roots(codex_home_override: Option<PathBuf>) -> Vec<Pat
     vec![home.join("sessions"), home.join("archived_sessions")]
 }
 
+fn normalized_sessions_root_key(root: &Path) -> String {
+    #[cfg(windows)]
+    {
+        normalize_workspace_match_path(&root.to_string_lossy())
+    }
+
+    #[cfg(not(windows))]
+    {
+        normalize_posix_workspace_match_path(&root.to_string_lossy())
+    }
+}
+
 fn merge_codex_session_roots(
     override_home: Option<PathBuf>,
     default_home: Option<PathBuf>,
 ) -> Vec<PathBuf> {
     let mut roots = Vec::new();
-    let mut seen = HashSet::new();
+    let mut seen_keys = HashSet::new();
 
     for root in resolve_codex_sessions_roots(override_home) {
-        if seen.insert(root.clone()) {
+        if seen_keys.insert(normalized_sessions_root_key(&root)) {
             roots.push(root);
         }
     }
@@ -2558,7 +2610,7 @@ fn merge_codex_session_roots(
         .map(|home| vec![home.join("sessions"), home.join("archived_sessions")])
         .unwrap_or_default()
     {
-        if seen.insert(root.clone()) {
+        if seen_keys.insert(normalized_sessions_root_key(&root)) {
             roots.push(root);
         }
     }
@@ -2577,10 +2629,10 @@ fn resolve_sessions_roots(
     }
 
     let mut roots = Vec::new();
-    let mut seen = HashSet::new();
+    let mut seen_keys = HashSet::new();
 
     for root in resolve_codex_sessions_roots(None) {
-        if seen.insert(root.clone()) {
+        if seen_keys.insert(normalized_sessions_root_key(&root)) {
             roots.push(root);
         }
     }
@@ -2594,7 +2646,7 @@ fn resolve_sessions_roots(
             continue;
         };
         for root in resolve_codex_sessions_roots(Some(codex_home)) {
-            if seen.insert(root.clone()) {
+            if seen_keys.insert(normalized_sessions_root_key(&root)) {
                 roots.push(root);
             }
         }
@@ -2621,6 +2673,21 @@ fn resolve_workspace_codex_home_for_path(
         .and_then(|parent_id| workspaces.get(parent_id));
 
     resolve_workspace_codex_home(entry, parent_entry)
+}
+
+pub(crate) fn find_best_matching_workspace_for_cwd<'a>(
+    workspaces: &'a HashMap<String, WorkspaceEntry>,
+    cwd: Option<&str>,
+) -> Option<&'a WorkspaceEntry> {
+    let cwd = cwd?.trim();
+    if cwd.is_empty() {
+        return None;
+    }
+
+    workspaces
+        .values()
+        .filter(|entry| path_matches_workspace(cwd, Path::new(&entry.path)))
+        .max_by_key(|entry| entry.path.len())
 }
 
 fn day_dir_for_key(root: &Path, day_key: &str) -> PathBuf {

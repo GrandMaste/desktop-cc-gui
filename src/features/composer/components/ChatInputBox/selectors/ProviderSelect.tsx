@@ -10,6 +10,8 @@ interface ProviderSelectProps {
   onChange?: (providerId: string) => void;
   providerAvailability?: Partial<Record<ProviderId, boolean>>;
   providerVersions?: Partial<Record<ProviderId, string | null>>;
+  providerStatusLabels?: Partial<Record<ProviderId, string | null>>;
+  providerDisabledMessages?: Partial<Record<ProviderId, string | null>>;
   iconOnly?: boolean;
 }
 
@@ -41,6 +43,8 @@ export const ProviderSelect = ({
   onChange,
   providerAvailability,
   providerVersions,
+  providerStatusLabels,
+  providerDisabledMessages,
   iconOnly = false,
 }: ProviderSelectProps) => {
   const { t } = useTranslation();
@@ -54,6 +58,8 @@ export const ProviderSelect = ({
     ...provider,
     enabled: providerAvailability?.[provider.id] ?? provider.enabled,
     version: providerVersions?.[provider.id] ?? null,
+    statusLabel: providerStatusLabels?.[provider.id] ?? null,
+    disabledMessage: providerDisabledMessages?.[provider.id] ?? null,
   }));
   const currentProvider =
     providers.find((p) => p.id === value) ??
@@ -97,8 +103,7 @@ export const ProviderSelect = ({
     if (!provider) return;
 
     if (!provider.enabled) {
-      // If provider is unavailable, show toast
-      showToastMessage(t('settings.provider.featureComingSoon'));
+      showToastMessage(provider.disabledMessage || provider.statusLabel || t('settings.provider.featureComingSoon'));
       setIsOpen(false);
       return;
     }
@@ -143,7 +148,7 @@ export const ProviderSelect = ({
           ref={buttonRef}
           className={`selector-button ${iconOnly ? 'selector-provider-button' : ''}`}
           onClick={handleToggle}
-          title={`${t('config.switchProvider')}: ${getProviderLabel(currentProvider.id)}${currentProvider.version ? ` (${currentProvider.version})` : ''}`}
+          title={`${t('config.switchProvider')}: ${getProviderLabel(currentProvider.id)}${currentProvider.version ? ` (${currentProvider.version})` : ''}${currentProvider.statusLabel ? `（${currentProvider.statusLabel}）` : ''}`}
           aria-label={`${t('config.switchProvider')}: ${getProviderLabel(currentProvider.id)}`}
         >
           <ProviderIcon providerId={currentProvider.id} size={12} />
@@ -179,6 +184,7 @@ export const ProviderSelect = ({
                 <span>
                   {getProviderLabel(provider.id)}
                   {provider.version ? ` (${provider.version})` : ''}
+                  {provider.statusLabel ? `（${provider.statusLabel}）` : ''}
                 </span>
                 {provider.id === value && (
                   <span className="codicon codicon-check check-mark" />

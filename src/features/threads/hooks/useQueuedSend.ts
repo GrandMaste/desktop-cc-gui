@@ -45,6 +45,7 @@ type UseQueuedSendOptions = {
   startImport: (text: string) => Promise<void>;
   startLsp: (text: string) => Promise<void>;
   startShare: (text: string) => Promise<void>;
+  startCompact: (text: string) => Promise<void>;
   startFast: (text: string) => Promise<void>;
   startMode: (text: string) => Promise<void>;
   setCodexCollaborationMode?: (mode: "plan" | "code") => void;
@@ -98,6 +99,7 @@ type SlashCommandKind =
   | "import"
   | "lsp"
   | "share"
+  | "compact"
   | "plan"
   | "defaultMode"
   | "code"
@@ -188,6 +190,9 @@ function parseSlashCommand(text: string): SlashCommandKind | null {
   if (commandToken === "share") {
     return "share";
   }
+  if (commandToken === "compact") {
+    return "compact";
+  }
   if (commandToken === "plan") {
     return "plan";
   }
@@ -217,9 +222,14 @@ function isCodexOnlyCommand(command: SlashCommandKind): boolean {
   );
 }
 
+function isClaudeOnlyCommand(command: SlashCommandKind): boolean {
+  return command === "compact";
+}
+
 function canExecuteSlashCommand(
   command: SlashCommandKind | null,
   activeEngine: EngineType,
+  activeThreadId: string | null,
 ): command is SlashCommandKind {
   if (!command) {
     return false;
@@ -229,6 +239,16 @@ function canExecuteSlashCommand(
   }
   if (isCodexOnlyCommand(command) && activeEngine !== "codex") {
     return false;
+  }
+  if (isClaudeOnlyCommand(command)) {
+    if (activeEngine === "claude") {
+      return true;
+    }
+    return Boolean(
+      activeThreadId &&
+        (activeThreadId.startsWith("claude:")
+          || activeThreadId.startsWith("claude-pending-")),
+    );
   }
   return true;
 }
@@ -256,6 +276,7 @@ export function useQueuedSend({
   startImport,
   startLsp,
   startShare,
+  startCompact,
   startFast,
   startMode,
   setCodexCollaborationMode,
@@ -572,6 +593,10 @@ export function useQueuedSend({
         await startShare(trimmed);
         return true;
       }
+      if (command === "compact") {
+        await startCompact(trimmed);
+        return true;
+      }
       if (command === "clear" && activeWorkspace) {
         const threadId = await startThreadForWorkspace(activeWorkspace.id, { engine: activeEngine });
         const rest = trimmed.replace(/^\/(?:clear|reset)\b/i, "").trim();
@@ -617,6 +642,7 @@ export function useQueuedSend({
       startImport,
       startLsp,
       startShare,
+      startCompact,
       startFast,
       startMode,
       startThreadForWorkspace,
@@ -628,7 +654,11 @@ export function useQueuedSend({
     async (item: QueuedMessage): Promise<boolean> => {
       const trimmed = item.text.trim();
       const command = parseSlashCommand(trimmed);
-      const commandEnabled = canExecuteSlashCommand(command, activeEngine);
+      const commandEnabled = canExecuteSlashCommand(
+        command,
+        activeEngine,
+        activeThreadId,
+      );
       if (activeWorkspace && !activeWorkspace.connected) {
         await connectWorkspace(activeWorkspace);
       }
@@ -674,7 +704,11 @@ export function useQueuedSend({
     ) => {
       const trimmed = text.trim();
       const command = parseSlashCommand(trimmed);
-      const commandEnabled = canExecuteSlashCommand(command, activeEngine);
+      const commandEnabled = canExecuteSlashCommand(
+        command,
+        activeEngine,
+        activeThreadId,
+      );
       const nextImages = commandEnabled ? [] : images;
       if (!trimmed && nextImages.length === 0) {
         return;
@@ -717,7 +751,11 @@ export function useQueuedSend({
     ) => {
       const trimmed = text.trim();
       const command = parseSlashCommand(trimmed);
-      const commandEnabled = canExecuteSlashCommand(command, activeEngine);
+      const commandEnabled = canExecuteSlashCommand(
+        command,
+        activeEngine,
+        activeThreadId,
+      );
       const nextImages = commandEnabled ? [] : images;
       if (!trimmed && nextImages.length === 0) {
         return;

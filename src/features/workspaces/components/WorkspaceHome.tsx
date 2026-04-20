@@ -64,6 +64,8 @@ function splitWorkspacePath(path: string, fallbackName: string) {
 export function WorkspaceHome({
   workspace,
   currentBranch,
+  recentThreads: _recentThreads,
+  onSelectConversation: _onSelectConversation,
 }: WorkspaceHomeProps) {
   const { t } = useTranslation();
   const branchLabel = currentBranch || workspace.worktree?.branch || null;
@@ -75,32 +77,34 @@ export function WorkspaceHome({
   return (
     <section className="workspace-home workspace-home-minimal">
       <div className="workspace-home-shell">
-        <header className="workspace-home-hero">
-          <div
-            className="workspace-home-mark"
-            role="img"
-            aria-label={t("workspace.engineOpenCode")}
-          >
-            <EngineIcon engine="opencode" size={72} className="workspace-home-mark-icon" />
-          </div>
+        <div className="workspace-home-stack">
+          <header className="workspace-home-hero">
+            <div
+              className="workspace-home-mark"
+              role="img"
+              aria-label={t("workspace.engineOpenCode")}
+            >
+              <EngineIcon engine="opencode" size={72} className="workspace-home-mark-icon" />
+            </div>
 
-          <div className="workspace-home-copy">
-            <h1 className="workspace-home-title">{t("workspace.homeHeroTitle")}</h1>
+            <div className="workspace-home-copy">
+              <h1 className="workspace-home-title">{t("workspace.homeHeroTitle")}</h1>
 
-            <p className="workspace-home-path-line" title={workspace.path}>
-              {pathPrefix ? <span className="workspace-home-path-prefix">{pathPrefix}</span> : null}
-              <span className="workspace-home-path-name">{pathName}</span>
-            </p>
+              <p className="workspace-home-path-line" title={workspace.path}>
+                {pathPrefix ? <span className="workspace-home-path-prefix">{pathPrefix}</span> : null}
+                <span className="workspace-home-path-name">{pathName}</span>
+              </p>
 
-            {branchLabel ? (
-              <div className="workspace-home-branch-line">
-                <GitBranch size={20} aria-hidden className="workspace-home-branch-icon" />
-                <span className="workspace-home-branch-label">{branchDescriptor}</span>
-                <span className="workspace-home-branch-value">({branchLabel})</span>
-              </div>
-            ) : null}
-          </div>
-        </header>
+              {branchLabel ? (
+                <div className="workspace-home-branch-line">
+                  <GitBranch size={20} aria-hidden className="workspace-home-branch-icon" />
+                  <span className="workspace-home-branch-label">{branchDescriptor}</span>
+                  <span className="workspace-home-branch-value">({branchLabel})</span>
+                </div>
+              ) : null}
+            </div>
+          </header>
+        </div>
       </div>
     </section>
   );

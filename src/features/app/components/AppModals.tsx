@@ -1,7 +1,9 @@
 import { lazy, memo, Suspense } from "react";
+import { LoadingProgressDialog } from "../../../components/ui/LoadingProgressDialog";
 import { useRenameThreadPrompt } from "../../threads/hooks/useRenameThreadPrompt";
 import { useClonePrompt } from "../../workspaces/hooks/useClonePrompt";
 import { useWorktreePrompt } from "../../workspaces/hooks/useWorktreePrompt";
+import type { useLoadingProgressDialogState } from "../hooks/useLoadingProgressDialogState";
 
 const RenameThreadPrompt = lazy(() =>
   import("../../threads/components/RenameThreadPrompt").then((module) => ({
@@ -30,8 +32,12 @@ type WorktreePromptState = ReturnType<typeof useWorktreePrompt>["worktreePrompt"
 type WorktreeCreateResultState = ReturnType<typeof useWorktreePrompt>["worktreeCreateResult"];
 
 type ClonePromptState = ReturnType<typeof useClonePrompt>["clonePrompt"];
+type LoadingProgressDialogState =
+  ReturnType<typeof useLoadingProgressDialogState>["loadingProgressDialog"];
 
 type AppModalsProps = {
+  loadingProgressDialog: LoadingProgressDialogState;
+  onLoadingProgressDialogClose: () => void;
   renamePrompt: RenamePromptState;
   onRenamePromptChange: (value: string) => void;
   onRenamePromptCancel: () => void;
@@ -55,6 +61,8 @@ type AppModalsProps = {
 };
 
 export const AppModals = memo(function AppModals({
+  loadingProgressDialog,
+  onLoadingProgressDialogClose,
   renamePrompt,
   onRenamePromptChange,
   onRenamePromptCancel,
@@ -78,6 +86,13 @@ export const AppModals = memo(function AppModals({
 }: AppModalsProps) {
   return (
     <>
+      {loadingProgressDialog && (
+        <LoadingProgressDialog
+          title={loadingProgressDialog.title}
+          message={loadingProgressDialog.message}
+          onClose={onLoadingProgressDialogClose}
+        />
+      )}
       {renamePrompt && (
         <Suspense fallback={null}>
           <RenameThreadPrompt

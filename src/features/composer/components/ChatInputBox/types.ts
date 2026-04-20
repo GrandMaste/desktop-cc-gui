@@ -511,6 +511,10 @@ export interface ChatInputBoxProps {
   providerAvailability?: Partial<Record<ProviderId, boolean>>;
   /** Provider CLI versions (from host app detection) */
   providerVersions?: Partial<Record<ProviderId, string | null>>;
+  /** Provider disabled-state status label shown in selector */
+  providerStatusLabels?: Partial<Record<ProviderId, string | null>>;
+  /** Provider disabled click message */
+  providerDisabledMessages?: Partial<Record<ProviderId, string | null>>;
   /** Usage percentage */
   usagePercentage?: number;
   /** Used context tokens */
@@ -693,6 +697,10 @@ export interface ButtonAreaProps {
   providerAvailability?: Partial<Record<ProviderId, boolean>>;
   /** Provider CLI versions (from host app detection) */
   providerVersions?: Partial<Record<ProviderId, string | null>>;
+  /** Provider disabled-state status label shown in selector */
+  providerStatusLabels?: Partial<Record<ProviderId, string | null>>;
+  /** Provider disabled click message */
+  providerDisabledMessages?: Partial<Record<ProviderId, string | null>>;
   /** Current reasoning effort (Codex only) */
   reasoningEffort?: ReasoningEffort;
   /** Account rate limits snapshot for codex usage panel */

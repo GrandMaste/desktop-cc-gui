@@ -20,6 +20,10 @@ use crate::types::{AppSettings, WorkspaceEntry};
 
 const LEDGER_FILE_NAME: &str = "runtime-pool-ledger.json";
 const TERMINATE_GRACE_MILLIS: u64 = 150;
+pub(crate) const RUNTIME_ACQUIRE_WAIT_TIMEOUT_SECS: u64 = 5;
+pub(crate) const RUNTIME_RECOVERY_MAX_CONSECUTIVE_FAILURES: u8 = 3;
+pub(crate) const RUNTIME_RECOVERY_RETRY_BACKOFF_MILLIS: u64 = 250;
+pub(crate) const RUNTIME_RECOVERY_QUARANTINE_MILLIS: u64 = 15_000;
 
 fn now_millis() -> u64 {
     SystemTime::now()
@@ -277,6 +281,14 @@ struct RuntimeEntry {
     process_diagnostics: Option<RuntimeProcessDiagnostics>,
 }
 
+#[derive(Debug, Clone, Default)]
+struct RuntimeRecoveryEntry {
+    consecutive_failures: u8,
+    last_failure_at_ms: Option<u64>,
+    quarantined_until_ms: Option<u64>,
+    last_error: Option<String>,
+}
+
 impl RuntimeEntry {
     fn from_workspace(entry: &WorkspaceEntry, engine: &str) -> Self {
         Self {
@@ -328,15 +340,35 @@ impl RuntimeEntry {
 pub(crate) struct RuntimeManager {
     entries: Mutex<HashMap<String, RuntimeEntry>>,
     diagnostics: Mutex<RuntimePoolDiagnostics>,
-    startup_gates: Mutex<HashMap<String, Arc<Notify>>>,
+    recovery: Mutex<HashMap<String, RuntimeRecoveryEntry>>,
+    startup_gates: Mutex<HashMap<String, RuntimeAcquireGateEntry>>,
     ledger_path: PathBuf,
     shutting_down: AtomicBool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RuntimeAcquireToken {
+    key: String,
+    nonce: String,
+}
+
+#[derive(Debug, Clone)]
+struct RuntimeAcquireGateEntry {
+    notify: Arc<Notify>,
+    token: RuntimeAcquireToken,
+    started_at_ms: u64,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) enum RuntimeAcquireGate {
-    Leader,
+    Leader(RuntimeAcquireToken),
     Waiter(Arc<Notify>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum RuntimeAcquireDisposition {
+    Leader(RuntimeAcquireToken),
+    Retry,
 }
 
 #[derive(Debug, Clone)]
@@ -351,10 +383,116 @@ impl RuntimeManager {
         Self {
             entries: Mutex::new(HashMap::new()),
             diagnostics: Mutex::new(RuntimePoolDiagnostics::default()),
+            recovery: Mutex::new(HashMap::new()),
             startup_gates: Mutex::new(HashMap::new()),
             ledger_path: data_dir.join(LEDGER_FILE_NAME),
             shutting_down: AtomicBool::new(false),
         }
+    }
+
+    pub(crate) async fn recovery_quarantine_error(
+        &self,
+        engine: &str,
+        workspace_id: &str,
+    ) -> Option<String> {
+        let key = runtime_key(engine, workspace_id);
+        let mut recovery = self.recovery.lock().await;
+        let now = now_millis();
+        let entry = recovery.get_mut(&key)?;
+        let quarantined_until_ms = entry.quarantined_until_ms?;
+        if quarantined_until_ms <= now {
+            recovery.remove(&key);
+            return None;
+        }
+        let remaining_ms = quarantined_until_ms.saturating_sub(now);
+        let remaining_secs = remaining_ms.div_ceil(1000);
+        let last_error = entry
+            .last_error
+            .as_deref()
+            .unwrap_or("unknown runtime failure");
+        Some(format!(
+            "[RUNTIME_RECOVERY_QUARANTINED] Runtime recovery paused for workspace {} (engine {}) after repeated failures. Retry after {}s. Last error: {}",
+            workspace_id,
+            normalize_engine(engine),
+            remaining_secs,
+            last_error
+        ))
+    }
+
+    pub(crate) async fn ensure_recovery_ready(
+        &self,
+        engine: &str,
+        workspace_id: &str,
+    ) -> Result<(), String> {
+        if let Some(error) = self.recovery_quarantine_error(engine, workspace_id).await {
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn record_recovery_success(&self, engine: &str, workspace_id: &str) {
+        let key = runtime_key(engine, workspace_id);
+        self.recovery.lock().await.remove(&key);
+    }
+
+    pub(crate) async fn record_recovery_failure(
+        &self,
+        engine: &str,
+        workspace_id: &str,
+        error: &str,
+    ) -> Option<String> {
+        let key = runtime_key(engine, workspace_id);
+        let mut recovery = self.recovery.lock().await;
+        let now = now_millis();
+        let entry = recovery.entry(key).or_default();
+        entry.consecutive_failures = entry
+            .consecutive_failures
+            .saturating_add(1)
+            .min(RUNTIME_RECOVERY_MAX_CONSECUTIVE_FAILURES);
+        entry.last_failure_at_ms = Some(now);
+        entry.last_error = Some(error.to_string());
+
+        if entry.consecutive_failures < RUNTIME_RECOVERY_MAX_CONSECUTIVE_FAILURES {
+            entry.quarantined_until_ms = None;
+            return None;
+        }
+
+        let quarantined_until_ms = now.saturating_add(RUNTIME_RECOVERY_QUARANTINE_MILLIS);
+        entry.quarantined_until_ms = Some(quarantined_until_ms);
+        let remaining_secs = RUNTIME_RECOVERY_QUARANTINE_MILLIS.div_ceil(1000);
+        Some(format!(
+            "[RUNTIME_RECOVERY_QUARANTINED] Runtime recovery paused for workspace {} (engine {}) after {} consecutive failures. Retry after {}s. Last error: {}",
+            workspace_id,
+            normalize_engine(engine),
+            entry.consecutive_failures,
+            remaining_secs,
+            error
+        ))
+    }
+
+    pub(crate) async fn record_recovery_failure_with_backoff(
+        &self,
+        engine: &str,
+        workspace_id: &str,
+        error: &str,
+    ) -> Result<(), String> {
+        if let Some(quarantine_error) = self
+            .record_recovery_failure(engine, workspace_id, error)
+            .await
+        {
+            return Err(quarantine_error);
+        }
+        tokio::time::sleep(Duration::from_millis(RUNTIME_RECOVERY_RETRY_BACKOFF_MILLIS)).await;
+        Ok(())
+    }
+
+    fn runtime_acquire_stale_after(wait_timeout: Duration) -> Duration {
+        let wait_millis = wait_timeout.as_millis();
+        let multiplier = u128::from(RUNTIME_RECOVERY_MAX_CONSECUTIVE_FAILURES);
+        let total_millis = wait_millis
+            .saturating_mul(multiplier)
+            .min(u128::from(u64::MAX));
+        Duration::from_millis(total_millis as u64)
     }
 
     pub(crate) async fn begin_runtime_acquire(
@@ -364,18 +502,122 @@ impl RuntimeManager {
     ) -> RuntimeAcquireGate {
         let key = runtime_key(engine, workspace_id);
         let mut startup_gates = self.startup_gates.lock().await;
-        if let Some(notify) = startup_gates.get(&key) {
-            return RuntimeAcquireGate::Waiter(notify.clone());
+        if let Some(entry) = startup_gates.get(&key) {
+            return RuntimeAcquireGate::Waiter(entry.notify.clone());
         }
-        startup_gates.insert(key, Arc::new(Notify::new()));
-        RuntimeAcquireGate::Leader
+        let token = RuntimeAcquireToken {
+            key: key.clone(),
+            nonce: uuid::Uuid::new_v4().to_string(),
+        };
+        startup_gates.insert(
+            key,
+            RuntimeAcquireGateEntry {
+                notify: Arc::new(Notify::new()),
+                token: token.clone(),
+                started_at_ms: now_millis(),
+            },
+        );
+        RuntimeAcquireGate::Leader(token)
     }
 
-    pub(crate) async fn finish_runtime_acquire(&self, engine: &str, workspace_id: &str) {
+    async fn take_over_runtime_acquire_if_stale(
+        &self,
+        engine: &str,
+        workspace_id: &str,
+        waited_notify: &Arc<Notify>,
+        stale_after: Duration,
+    ) -> Option<RuntimeAcquireToken> {
         let key = runtime_key(engine, workspace_id);
-        let notify = self.startup_gates.lock().await.remove(&key);
-        if let Some(notify) = notify {
-            notify.notify_waiters();
+        let stale_after_ms = stale_after.as_millis().min(u128::from(u64::MAX)) as u64;
+        let mut startup_gates = self.startup_gates.lock().await;
+        let existing = startup_gates.get(&key)?;
+        let waited_long_enough =
+            now_millis().saturating_sub(existing.started_at_ms) >= stale_after_ms;
+        if !Arc::ptr_eq(&existing.notify, waited_notify) || !waited_long_enough {
+            return None;
+        }
+
+        let stale_notify = existing.notify.clone();
+        let token = RuntimeAcquireToken {
+            key: key.clone(),
+            nonce: uuid::Uuid::new_v4().to_string(),
+        };
+        startup_gates.insert(
+            key,
+            RuntimeAcquireGateEntry {
+                notify: Arc::new(Notify::new()),
+                token: token.clone(),
+                started_at_ms: now_millis(),
+            },
+        );
+        drop(startup_gates);
+        stale_notify.notify_waiters();
+        Some(token)
+    }
+
+    async fn begin_runtime_acquire_or_retry_with_timeout(
+        &self,
+        engine: &str,
+        workspace_id: &str,
+        wait_timeout: Duration,
+        timeout_error: &str,
+    ) -> Result<RuntimeAcquireDisposition, String> {
+        self.ensure_recovery_ready(engine, workspace_id).await?;
+        match self.begin_runtime_acquire(engine, workspace_id).await {
+            RuntimeAcquireGate::Leader(token) => Ok(RuntimeAcquireDisposition::Leader(token)),
+            RuntimeAcquireGate::Waiter(notify) => {
+                match tokio::time::timeout(wait_timeout, notify.notified()).await {
+                    Ok(()) => Ok(RuntimeAcquireDisposition::Retry),
+                    Err(_) => {
+                        self.record_recovery_failure_with_backoff(
+                            engine,
+                            workspace_id,
+                            timeout_error,
+                        )
+                        .await?;
+                        if let Some(token) = self
+                            .take_over_runtime_acquire_if_stale(
+                                engine,
+                                workspace_id,
+                                &notify,
+                                Self::runtime_acquire_stale_after(wait_timeout),
+                            )
+                            .await
+                        {
+                            return Ok(RuntimeAcquireDisposition::Leader(token));
+                        }
+                        Ok(RuntimeAcquireDisposition::Retry)
+                    }
+                }
+            }
+        }
+    }
+
+    pub(crate) async fn begin_runtime_acquire_or_retry(
+        &self,
+        engine: &str,
+        workspace_id: &str,
+        timeout_error: &str,
+    ) -> Result<RuntimeAcquireDisposition, String> {
+        self.begin_runtime_acquire_or_retry_with_timeout(
+            engine,
+            workspace_id,
+            Duration::from_secs(RUNTIME_ACQUIRE_WAIT_TIMEOUT_SECS),
+            timeout_error,
+        )
+        .await
+    }
+
+    pub(crate) async fn finish_runtime_acquire(&self, token: &RuntimeAcquireToken) {
+        let notify = {
+            let mut startup_gates = self.startup_gates.lock().await;
+            match startup_gates.get(&token.key) {
+                Some(entry) if entry.token == *token => startup_gates.remove(&token.key),
+                _ => None,
+            }
+        };
+        if let Some(entry) = notify {
+            entry.notify.notify_waiters();
         }
     }
 
@@ -1755,11 +1997,14 @@ mod tests {
     use super::{
         build_engine_observability, is_engine_root_process, parse_process_rows_unix_output,
         parse_process_rows_windows_payload, write_json_atomically, ProcessSnapshotRow,
-        RuntimeEngineObservability, RuntimeManager, RuntimeProcessDiagnostics, RuntimeState,
+        RuntimeAcquireDisposition, RuntimeAcquireGate, RuntimeEngineObservability, RuntimeManager,
+        RuntimeProcessDiagnostics, RuntimeState, RUNTIME_RECOVERY_MAX_CONSECUTIVE_FAILURES,
     };
     use crate::types::{AppSettings, WorkspaceEntry, WorkspaceKind, WorkspaceSettings};
     use serde_json::json;
     use std::fs;
+    use std::sync::Arc;
+    use std::time::Duration;
     use uuid::Uuid;
 
     fn workspace_entry(id: &str) -> WorkspaceEntry {
@@ -1820,6 +2065,154 @@ mod tests {
         assert_eq!(candidates.len(), 1);
         let snapshot = manager.snapshot(&settings).await;
         assert!(matches!(snapshot.rows[0].state, RuntimeState::Evictable));
+    }
+
+    #[tokio::test]
+    async fn recovery_guard_quarantines_after_repeated_failures() {
+        let manager = RuntimeManager::new(&std::env::temp_dir());
+
+        for attempt in 1..RUNTIME_RECOVERY_MAX_CONSECUTIVE_FAILURES {
+            let quarantined = manager
+                .record_recovery_failure("codex", "ws-1", &format!("boom-{attempt}"))
+                .await;
+            assert!(quarantined.is_none());
+        }
+
+        let quarantined = manager
+            .record_recovery_failure("codex", "ws-1", "boom-final")
+            .await;
+        let message = quarantined.expect("should enter quarantine");
+        assert!(message.contains("[RUNTIME_RECOVERY_QUARANTINED]"));
+        assert!(message.contains("boom-final"));
+
+        let blocked = manager
+            .recovery_quarantine_error("codex", "ws-1")
+            .await
+            .expect("quarantine should block immediate retry");
+        assert!(blocked.contains("Retry after"));
+    }
+
+    #[tokio::test]
+    async fn recovery_guard_resets_after_success() {
+        let manager = RuntimeManager::new(&std::env::temp_dir());
+        let _ = manager
+            .record_recovery_failure("codex", "ws-1", "boom")
+            .await;
+
+        manager.record_recovery_success("codex", "ws-1").await;
+
+        assert!(manager
+            .recovery_quarantine_error("codex", "ws-1")
+            .await
+            .is_none());
+        let next = manager
+            .record_recovery_failure("codex", "ws-1", "boom-again")
+            .await;
+        assert!(next.is_none());
+    }
+
+    #[tokio::test]
+    async fn begin_runtime_acquire_or_retry_retries_after_leader_finishes() {
+        let manager = Arc::new(RuntimeManager::new(&std::env::temp_dir()));
+        let leader = manager.begin_runtime_acquire("codex", "ws-1").await;
+        let leader_token = match leader {
+            RuntimeAcquireGate::Leader(token) => token,
+            RuntimeAcquireGate::Waiter(_) => panic!("first acquire should become leader"),
+        };
+
+        let manager_for_finish = Arc::clone(&manager);
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            manager_for_finish
+                .finish_runtime_acquire(&leader_token)
+                .await;
+        });
+
+        let result = manager
+            .begin_runtime_acquire_or_retry_with_timeout(
+                "codex",
+                "ws-1",
+                Duration::from_millis(50),
+                "timed out waiting for concurrent runtime acquire",
+            )
+            .await
+            .expect("waiter should retry after leader finishes");
+        assert_eq!(result, RuntimeAcquireDisposition::Retry);
+        assert!(manager
+            .recovery_quarantine_error("codex", "ws-1")
+            .await
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn begin_runtime_acquire_or_retry_quarantines_after_repeated_waiter_timeouts() {
+        let manager = RuntimeManager::new(&std::env::temp_dir());
+        let leader = manager.begin_runtime_acquire("codex", "ws-1").await;
+        assert!(matches!(leader, RuntimeAcquireGate::Leader(_)));
+
+        for _ in 1..=RUNTIME_RECOVERY_MAX_CONSECUTIVE_FAILURES {
+            let result = manager
+                .begin_runtime_acquire_or_retry_with_timeout(
+                    "codex",
+                    "ws-1",
+                    Duration::from_millis(200),
+                    "timed out waiting for concurrent runtime acquire",
+                )
+                .await;
+            if result.is_err() {
+                break;
+            }
+            assert_eq!(result.unwrap(), RuntimeAcquireDisposition::Retry);
+            let mut startup_gates = manager.startup_gates.lock().await;
+            let entry = startup_gates
+                .get_mut("codex::ws-1")
+                .expect("gate entry should remain present");
+            entry.started_at_ms = super::now_millis();
+        }
+
+        let blocked = manager
+            .ensure_recovery_ready("codex", "ws-1")
+            .await
+            .expect_err("repeated waiter timeouts should enter quarantine");
+        assert!(blocked.contains("[RUNTIME_RECOVERY_QUARANTINED]"));
+    }
+
+    #[tokio::test]
+    async fn stale_runtime_acquire_can_be_taken_over_without_losing_new_gate() {
+        let manager = RuntimeManager::new(&std::env::temp_dir());
+        let leader = manager.begin_runtime_acquire("codex", "ws-1").await;
+        let leader_token = match leader {
+            RuntimeAcquireGate::Leader(token) => token,
+            RuntimeAcquireGate::Waiter(_) => panic!("first acquire should become leader"),
+        };
+
+        {
+            let mut startup_gates = manager.startup_gates.lock().await;
+            let entry = startup_gates
+                .get_mut("codex::ws-1")
+                .expect("gate entry should exist");
+            entry.started_at_ms = entry.started_at_ms.saturating_sub(100);
+        }
+
+        let takeover = manager
+            .begin_runtime_acquire_or_retry_with_timeout(
+                "codex",
+                "ws-1",
+                Duration::from_millis(5),
+                "timed out waiting for concurrent runtime acquire",
+            )
+            .await
+            .expect("stale waiter should take over");
+        let takeover_token = match takeover {
+            RuntimeAcquireDisposition::Leader(token) => token,
+            RuntimeAcquireDisposition::Retry => panic!("stale waiter should become leader"),
+        };
+
+        manager.finish_runtime_acquire(&leader_token).await;
+        assert!(manager.has_pending_acquire_for_engine("codex").await);
+
+        manager.finish_runtime_acquire(&takeover_token).await;
+        assert!(!manager.has_pending_acquire_for_engine("codex").await);
     }
 
     #[test]

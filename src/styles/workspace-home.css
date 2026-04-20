@@ -23,12 +23,20 @@
   min-height: calc(100% - 56px);
   margin: 0 auto;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
 }
 
-.workspace-home-hero {
+.workspace-home-stack {
   width: min(100%, 920px);
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 32px;
+  padding: 40px 0 56px;
+}
+
+.workspace-home-hero {
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -118,6 +126,11 @@
 
   .workspace-home-shell {
     min-height: calc(100% - 36px);
+  }
+
+  .workspace-home-stack {
+    gap: 24px;
+    padding: 20px 0 28px;
   }
 
   .workspace-home-hero {

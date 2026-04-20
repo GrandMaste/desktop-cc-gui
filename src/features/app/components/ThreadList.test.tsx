@@ -15,6 +15,9 @@ vi.mock("react-i18next", () => ({
         "threads.loading": "Loading...",
         "threads.searchOlder": "Search older...",
         "threads.loadOlder": "Load older...",
+        "threads.degradedThreadListBadge": "Incomplete",
+        "threads.degradedThreadListTooltip":
+          "These thread results are not fully refreshed yet and may be missing some conversations.",
         "threads.autoNaming": "Auto naming...",
         "threads.pin": "Pin",
         "threads.unpin": "Unpin",
@@ -231,7 +234,11 @@ describe("ThreadList", () => {
   });
 
   it("renders only relative time inline when size is available", () => {
-    const { container } = render(<ThreadList {...baseProps} />);
+    const { container } = render(
+      <ThreadList
+        {...baseProps}
+      />,
+    );
 
     const meta = container.querySelector(".thread-meta");
     expect(meta).toBeTruthy();

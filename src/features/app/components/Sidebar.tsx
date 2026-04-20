@@ -11,7 +11,7 @@ import type { ReactNode, RefObject } from "react";
 import { useTranslation } from "react-i18next";
 
 import { ThreadList } from "./ThreadList";
-import { ThreadLoading } from "./ThreadLoading";
+import { ThreadEmptyState } from "./ThreadEmptyState";
 import { WorktreeSection } from "./WorktreeSection";
 import { PinnedThreadList } from "./PinnedThreadList";
 import { WorkspaceCard } from "./WorkspaceCard";
@@ -25,6 +25,7 @@ import { isDefaultWorkspacePath } from "../../workspaces/utils/defaultWorkspace"
 import { formatShortcutForPlatform, isMacPlatform } from "../../../utils/shortcuts";
 import { formatRelativeTimeShort } from "../../../utils/time";
 import { EngineIcon } from "../../engine/components/EngineIcon";
+import type { EngineDisplayInfo } from "../../engine/hooks/useEngineController";
 import { TooltipIconButton } from "../../../components/ui/tooltip-icon-button";
 import { SharedSessionIcon } from "../../shared-session/components/SharedSessionIcon";
 import { pushErrorToast } from "../../../services/toasts";
@@ -65,6 +66,7 @@ type SidebarProps = {
     string,
     { isProcessing: boolean; hasUnread: boolean; isReviewing: boolean }
   >;
+  hydratedThreadListWorkspaceIds: ReadonlySet<string>;
   runningSessionCountByWorkspaceId?: Record<string, number>;
   recentSessionCountByWorkspaceId?: Record<string, number>;
   threadListLoadingByWorkspace: Record<string, boolean>;
@@ -91,6 +93,7 @@ type SidebarProps = {
   onSelectWorkspace: (id: string) => void;
   onConnectWorkspace: (workspace: WorkspaceInfo) => void;
   onAddAgent: (workspace: WorkspaceInfo, engine?: EngineType) => void;
+  engineOptions?: EngineDisplayInfo[];
   onAddSharedAgent?: (workspace: WorkspaceInfo) => void;
   onAddWorktreeAgent: (workspace: WorkspaceInfo) => void;
   onAddCloneAgent: (workspace: WorkspaceInfo) => void;
@@ -115,6 +118,7 @@ type SidebarProps = {
   onDeleteWorktree: (workspaceId: string) => void;
   onLoadOlderThreads: (workspaceId: string) => void;
   onReloadWorkspaceThreads: (workspaceId: string) => void;
+  onQuickReloadWorkspaceThreads?: (workspaceId: string) => void;
   workspaceDropTargetRef: RefObject<HTMLElement | null>;
   isWorkspaceDropActive: boolean;
   workspaceDropText: string;
@@ -144,9 +148,10 @@ export function Sidebar({
   threadsByWorkspace,
   threadParentById,
   threadStatusById,
+  hydratedThreadListWorkspaceIds,
   runningSessionCountByWorkspaceId: _runningSessionCountByWorkspaceId = {},
   recentSessionCountByWorkspaceId: _recentSessionCountByWorkspaceId = {},
-  threadListLoadingByWorkspace,
+  threadListLoadingByWorkspace: _threadListLoadingByWorkspace,
   threadListPagingByWorkspace,
   threadListCursorByWorkspace,
   activeWorkspaceId,
@@ -164,9 +169,10 @@ export function Sidebar({
   onToggleTerminal: _onToggleTerminal,
   onAddWorkspace,
   onSelectHome: _onSelectHome,
-  onSelectWorkspace: _onSelectWorkspace,
+  onSelectWorkspace,
   onConnectWorkspace,
   onAddAgent,
+  engineOptions = [],
   onAddSharedAgent,
   onAddWorktreeAgent,
   onAddCloneAgent,
@@ -191,6 +197,7 @@ export function Sidebar({
   onDeleteWorktree,
   onLoadOlderThreads,
   onReloadWorkspaceThreads,
+  onQuickReloadWorkspaceThreads,
   workspaceDropTargetRef,
   isWorkspaceDropActive,
   workspaceDropText,
@@ -254,6 +261,7 @@ export function Sidebar({
   const {
     showThreadMenu,
     showWorkspaceMenu,
+    showWorkspaceSessionMenu,
     showWorktreeMenu,
     workspaceMenuState,
     closeWorkspaceMenu,
@@ -261,6 +269,7 @@ export function Sidebar({
   } =
     useSidebarMenus({
       onAddAgent,
+      engineOptions,
       onAddSharedAgent,
       onDeleteThread,
       onSyncThread,
@@ -716,6 +725,14 @@ export function Sidebar({
     pinThread(workspaceId, threadId);
   }, [isThreadPinned, pinThread, unpinThread]);
 
+  const hasDegradedThreadList = useCallback((threads: ThreadSummary[]) => {
+    return threads.some((thread) => {
+      const partialSource =
+        typeof thread.partialSource === "string" ? thread.partialSource.trim() : "";
+      return thread.isDegraded || partialSource.length > 0;
+    });
+  }, []);
+
   const renderWorkspaceEntry = useCallback((entry: WorkspaceInfo) => {
     const threads = threadsByWorkspace[entry.id] ?? [];
     const isCollapsed = entry.settings.sidebarCollapsed;
@@ -727,14 +744,21 @@ export function Sidebar({
       threadListCursorByWorkspace[entry.id] ?? null;
     const showThreadList =
       !isCollapsed && (threads.length > 0 || Boolean(nextCursor));
-    const isLoadingThreads =
-      threadListLoadingByWorkspace[entry.id] ?? false;
-    const showThreadLoader =
-      !isCollapsed && isLoadingThreads && threads.length === 0;
     const isPaging = threadListPagingByWorkspace[entry.id] ?? false;
     const worktrees = worktreesByParent.get(entry.id) ?? [];
     const isWorktreeSectionCollapsed =
       collapsedWorktreeSections.has(entry.id);
+    const showThreadEmptyState =
+      !isCollapsed &&
+      !showThreadList &&
+      worktrees.length === 0 &&
+      hydratedThreadListWorkspaceIds.has(entry.id);
+    const isThreadListDegraded =
+      hasDegradedThreadList(threads) ||
+      worktrees.some((worktree) => hasDegradedThreadList(threadsByWorkspace[worktree.id] ?? []));
+    const isThreadListRefreshing =
+      Boolean(_threadListLoadingByWorkspace[entry.id]) ||
+      worktrees.some((worktree) => Boolean(_threadListLoadingByWorkspace[worktree.id]));
     const hasPrimaryActiveThread =
       entry.id === activeWorkspaceId && Boolean(activeThreadId);
     const hasRunningSession = hasRunningSessionByProjectId.get(entry.id) ?? false;
@@ -744,10 +768,14 @@ export function Sidebar({
         workspace={entry}
         workspaceName={renderHighlightedName(entry.name)}
         isActive={entry.id === activeWorkspaceId}
+        isThreadListDegraded={isThreadListDegraded}
+        isThreadListRefreshing={isThreadListRefreshing}
         hasPrimaryActiveThread={hasPrimaryActiveThread}
         hasRunningSession={hasRunningSession}
         isCollapsed={isCollapsed}
         onShowWorkspaceMenu={showWorkspaceMenu}
+        onQuickReloadWorkspaceThreads={onQuickReloadWorkspaceThreads}
+        onSelectWorkspace={onSelectWorkspace}
         onToggleWorkspaceCollapse={onToggleWorkspaceCollapse}
       >
         {!isCollapsed && worktrees.length > 0 && (
@@ -759,7 +787,8 @@ export function Sidebar({
             deletingWorktreeIds={deletingWorktreeIds}
             threadsByWorkspace={threadsByWorkspace}
             threadStatusById={threadStatusById}
-            threadListLoadingByWorkspace={threadListLoadingByWorkspace}
+            hydratedThreadListWorkspaceIds={hydratedThreadListWorkspaceIds}
+            threadListLoadingByWorkspace={_threadListLoadingByWorkspace}
             threadListPagingByWorkspace={threadListPagingByWorkspace}
             threadListCursorByWorkspace={threadListCursorByWorkspace}
             expandedWorkspaces={expandedWorkspaces}
@@ -774,6 +803,9 @@ export function Sidebar({
             onToggleThreadPin={handleToggleThreadPin}
             getPinTimestamp={getPinTimestamp}
             onConnectWorkspace={onConnectWorkspace}
+            onShowWorktreeSessionMenu={showWorkspaceSessionMenu}
+            onQuickReloadWorkspaceThreads={onQuickReloadWorkspaceThreads}
+            onSelectWorkspace={onSelectWorkspace}
             onToggleWorkspaceCollapse={onToggleWorkspaceCollapse}
             onSelectThread={onSelectThread}
             onShowThreadMenu={showThreadMenu}
@@ -816,9 +848,7 @@ export function Sidebar({
             onConfirmDeleteConfirm={onConfirmDeleteConfirm}
           />
         )}
-        {showThreadLoader && (
-          <ThreadLoading />
-        )}
+        {showThreadEmptyState ? <ThreadEmptyState /> : null}
       </WorkspaceCard>
     );
   }, [
@@ -836,28 +866,33 @@ export function Sidebar({
     handleToggleThreadPin,
     handleToggleExpanded,
     handleToggleWorktreeSection,
+    hasDegradedThreadList,
     isThreadAutoNaming,
     isThreadPinned,
     hasRunningSessionByProjectId,
+    onQuickReloadWorkspaceThreads,
     onCancelDeleteConfirm,
     onConfirmDeleteConfirm,
     onConnectWorkspace,
     onLoadOlderThreads,
+    onSelectWorkspace,
     onSelectThread,
     showThreadMenu,
     showWorkspaceMenu,
+    showWorkspaceSessionMenu,
     showWorktreeMenu,
     systemProxyEnabled,
     systemProxyUrl,
     onToggleWorkspaceCollapse,
     renderHighlightedName,
+    hydratedThreadListWorkspaceIds,
     threadListCursorByWorkspace,
-    threadListLoadingByWorkspace,
     threadListPagingByWorkspace,
     threadRowsByWorkspace,
     threadStatusById,
     threadsByWorkspace,
     worktreesByParent,
+    _threadListLoadingByWorkspace,
   ]);
 
   return (
@@ -1212,7 +1247,12 @@ export function Sidebar({
           <div
             className="sidebar-workspace-menu"
             role="menu"
-            aria-label={t("sidebar.workspaceActionsGroup")}
+            aria-label={
+              workspaceMenuState.groups.length === 1 &&
+              workspaceMenuState.groups[0]?.id === "new-session"
+                ? t("sidebar.sessionActionsGroup")
+                : t("sidebar.workspaceActionsGroup")
+            }
             style={{
               left: workspaceMenuState.x,
               top: workspaceMenuState.y,
@@ -1226,40 +1266,58 @@ export function Sidebar({
                   {group.label}
                 </div>
                 {group.actions.map((action) => (
-                  <button
-                    key={action.id}
-                    type="button"
-                    role="menuitem"
-                    className={`sidebar-workspace-menu-item${
-                      action.tone === "danger" ? " is-danger" : ""
-                    }${action.deprecated ? " is-deprecated" : ""}${
-                      action.unavailable ? " is-unavailable" : ""
-                    }`}
-                    disabled={action.unavailable}
-                    onClick={() => onWorkspaceMenuAction(action)}
-                  >
-                    <span
-                      className={`sidebar-workspace-menu-item-icon sidebar-workspace-menu-item-icon-${action.iconKind}${
+                  <div className="sidebar-workspace-menu-item-row" key={action.id}>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className={`sidebar-workspace-menu-item${
+                        action.tone === "danger" ? " is-danger" : ""
+                      }${action.deprecated ? " is-deprecated" : ""}${
                         action.unavailable ? " is-unavailable" : ""
                       }`}
-                      aria-hidden
+                      disabled={action.unavailable}
+                      onClick={() => onWorkspaceMenuAction(action)}
                     >
-                      {renderWorkspaceMenuIcon(action.iconKind)}
-                    </span>
-                    <span className="sidebar-workspace-menu-item-label">
-                      {action.label}
-                    </span>
-                    {action.deprecated ? (
-                      <span className="sidebar-workspace-menu-item-deprecated">
-                        ({t("sidebar.deprecatedTag")})
+                      <span
+                        className={`sidebar-workspace-menu-item-icon sidebar-workspace-menu-item-icon-${action.iconKind}${
+                          action.unavailable ? " is-unavailable" : ""
+                        }`}
+                        aria-hidden
+                      >
+                        {renderWorkspaceMenuIcon(action.iconKind)}
                       </span>
-                    ) : null}
-                    {action.unavailable ? (
-                      <span className="sidebar-workspace-menu-item-unavailable">
-                        ({t("sidebar.unavailableTag")})
+                      <span className="sidebar-workspace-menu-item-label">
+                        {action.label}
                       </span>
+                      {action.deprecated ? (
+                        <span className="sidebar-workspace-menu-item-deprecated">
+                          ({t("sidebar.deprecatedTag")})
+                        </span>
+                      ) : null}
+                      {action.unavailable ? (
+                        <span className="sidebar-workspace-menu-item-unavailable">
+                          （{action.statusLabel ?? t("sidebar.unavailableTag")}）
+                        </span>
+                      ) : null}
+                    </button>
+                    {action.refreshable ? (
+                      <button
+                        type="button"
+                        className={`sidebar-workspace-menu-item-refresh${
+                          action.refreshing ? " is-refreshing" : ""
+                        }`}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          void action.onRefresh?.();
+                        }}
+                        aria-label={t("common.refresh")}
+                        title={t("common.refresh")}
+                        disabled={action.refreshing}
+                      >
+                        <RefreshCw size={13} aria-hidden />
+                      </button>
                     ) : null}
-                  </button>
+                  </div>
                 ))}
                 {groupIndex < workspaceMenuState.groups.length - 1 ? (
                   <div className="sidebar-workspace-menu-divider" aria-hidden />

@@ -9,7 +9,7 @@ use tokio::time::Duration;
 use crate::backend::app_server::WorkspaceSession;
 use crate::codex::args::resolve_workspace_codex_args;
 use crate::codex::home::resolve_workspace_codex_home;
-use crate::runtime::RuntimeAcquireGate;
+use crate::runtime::RuntimeAcquireDisposition;
 use crate::storage::{write_workspaces, write_workspaces_preserving_existing};
 use crate::types::{
     AppSettings, WorkspaceEntry, WorkspaceInfo, WorkspaceKind, WorkspaceSettings, WorktreeInfo,
@@ -626,66 +626,120 @@ where
                     );
                     disconnect_workspace_session_core(sessions, runtime_manager, &workspace_id)
                         .await;
+                    if let Some(runtime_manager) = runtime_manager {
+                        if let Err(quarantine_error) = runtime_manager
+                            .record_recovery_failure_with_backoff(
+                                "codex",
+                                &workspace_id,
+                                "stale existing session failed health probe during connect",
+                            )
+                            .await
+                        {
+                            return Err(quarantine_error);
+                        }
+                        continue;
+                    }
                 }
             }
         }
 
-        let Some(runtime_manager) = runtime_manager else {
-            break;
-        };
-        match runtime_manager
-            .begin_runtime_acquire("codex", &workspace_id)
-            .await
-        {
-            RuntimeAcquireGate::Leader => break,
-            RuntimeAcquireGate::Waiter(notify) => notify.notified().await,
-        }
-    }
-    if let Some(runtime_manager) = runtime_manager {
-        runtime_manager
-            .record_starting(&entry, "codex", "connect")
-            .await;
-    }
-    let (default_bin, codex_args) = {
-        let settings = app_settings.lock().await;
-        (
-            settings.codex_bin.clone(),
-            resolve_workspace_codex_args(&entry, parent_entry.as_ref(), Some(&settings)),
-        )
-    };
-    let codex_home = resolve_workspace_codex_home(&entry, parent_entry.as_ref());
-    let spawn_result = spawn_session(entry.clone(), default_bin, codex_args, codex_home).await;
-    let session = match spawn_result {
-        Ok(session) => session,
-        Err(error) => {
-            if let Some(runtime_manager) = runtime_manager {
-                runtime_manager
-                    .record_failure(&entry, "codex", "connect", error.clone())
-                    .await;
-                runtime_manager
-                    .finish_runtime_acquire("codex", &workspace_id)
-                    .await;
+        let acquire_token = if let Some(runtime_manager) = runtime_manager {
+            match runtime_manager
+                .begin_runtime_acquire_or_retry(
+                    "codex",
+                    &workspace_id,
+                    "timed out waiting for concurrent runtime acquire during connect",
+                )
+                .await
+            {
+                Ok(RuntimeAcquireDisposition::Leader(token)) => Some(token),
+                Ok(RuntimeAcquireDisposition::Retry) => continue,
+                Err(error) => return Err(error),
             }
-            return Err(error);
+        } else {
+            None
+        };
+
+        if let Some(runtime_manager) = runtime_manager {
+            runtime_manager
+                .record_starting(&entry, "codex", "connect")
+                .await;
         }
-    };
-    if let Some(runtime_manager) = runtime_manager {
-        session.attach_runtime_manager(runtime_manager.clone());
+        let (default_bin, codex_args) = {
+            let settings = app_settings.lock().await;
+            (
+                settings.codex_bin.clone(),
+                resolve_workspace_codex_args(&entry, parent_entry.as_ref(), Some(&settings)),
+            )
+        };
+        let codex_home = resolve_workspace_codex_home(&entry, parent_entry.as_ref());
+        let spawn_result = spawn_session(entry.clone(), default_bin, codex_args, codex_home).await;
+        let session = match spawn_result {
+            Ok(created_session) => created_session,
+            Err(error) => {
+                if let Some(runtime_manager) = runtime_manager {
+                    runtime_manager
+                        .record_failure(&entry, "codex", "connect", error.clone())
+                        .await;
+                    runtime_manager
+                        .finish_runtime_acquire(
+                            acquire_token
+                                .as_ref()
+                                .expect("runtime acquire token must exist when manager exists"),
+                        )
+                        .await;
+                    if let Err(quarantine_error) = runtime_manager
+                        .record_recovery_failure_with_backoff(
+                            "codex",
+                            &workspace_id,
+                            error.as_str(),
+                        )
+                        .await
+                    {
+                        return Err(quarantine_error);
+                    }
+                    continue;
+                }
+                return Err(error);
+            }
+        };
+        if let Some(runtime_manager) = runtime_manager {
+            session.attach_runtime_manager(runtime_manager.clone());
+        }
+        let replace_result = crate::runtime::replace_workspace_session(
+            sessions,
+            runtime_manager.map(|manager| manager.as_ref()),
+            entry.id.clone(),
+            session,
+            "connect",
+        )
+        .await;
+        if let Some(runtime_manager) = runtime_manager {
+            runtime_manager
+                .finish_runtime_acquire(
+                    acquire_token
+                        .as_ref()
+                        .expect("runtime acquire token must exist when manager exists"),
+                )
+                .await;
+            if replace_result.is_ok() {
+                runtime_manager
+                    .record_recovery_success("codex", &workspace_id)
+                    .await;
+                return replace_result;
+            }
+            if let Err(error) = &replace_result {
+                if let Err(quarantine_error) = runtime_manager
+                    .record_recovery_failure_with_backoff("codex", &workspace_id, error.as_str())
+                    .await
+                {
+                    return Err(quarantine_error);
+                }
+                continue;
+            }
+        }
+        return replace_result;
     }
-    let replace_result = crate::runtime::replace_workspace_session(
-        sessions,
-        runtime_manager.map(|manager| manager.as_ref()),
-        entry.id,
-        session,
-        "connect",
-    )
-    .await;
-    if let Some(runtime_manager) = runtime_manager {
-        runtime_manager
-            .finish_runtime_acquire("codex", &workspace_id)
-            .await;
-    }
-    replace_result
 }
 
 pub(crate) async fn disconnect_workspace_session_core(
@@ -1468,15 +1522,16 @@ fn sort_workspaces(workspaces: &mut [WorkspaceInfo]) {
 #[cfg(test)]
 mod tests {
     use super::{
-        list_workspaces_core, normalize_workspace_display_name, resolve_base_ref_to_commit,
-        validate_local_branch_name_for_worktree, workspace_name_from_path,
-        workspace_requires_persistent_session,
+        connect_workspace_core, list_workspaces_core, normalize_workspace_display_name,
+        resolve_base_ref_to_commit, validate_local_branch_name_for_worktree,
+        workspace_name_from_path, workspace_requires_persistent_session,
     };
-    use crate::types::{WorkspaceEntry, WorkspaceKind, WorkspaceSettings};
+    use crate::types::{AppSettings, WorkspaceEntry, WorkspaceKind, WorkspaceSettings};
     use git2::{Repository, Signature};
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
+    use std::time::Duration;
     use tokio::sync::Mutex;
     use uuid::Uuid;
 
@@ -1601,5 +1656,40 @@ mod tests {
         assert!(by_id.get("ws-gemini").is_some_and(|row| row.connected));
         assert!(by_id.get("ws-opencode").is_some_and(|row| row.connected));
         assert!(by_id.get("ws-codex").is_some_and(|row| !row.connected));
+    }
+
+    #[tokio::test]
+    async fn connect_workspace_without_runtime_manager_returns_spawn_error() {
+        let mut workspace_map = HashMap::new();
+        workspace_map.insert(
+            "ws-codex".to_string(),
+            workspace_entry("ws-codex", Some("codex")),
+        );
+
+        let workspaces = Mutex::new(workspace_map);
+        let sessions: Mutex<HashMap<String, Arc<crate::backend::app_server::WorkspaceSession>>> =
+            Mutex::new(HashMap::new());
+        let app_settings = Mutex::new(AppSettings::default());
+
+        let result = tokio::time::timeout(
+            Duration::from_millis(100),
+            connect_workspace_core(
+                "ws-codex".to_string(),
+                &workspaces,
+                &sessions,
+                &app_settings,
+                None,
+                |_entry, _default_bin, _codex_args, _codex_home| async {
+                    Err("spawn failed".to_string())
+                },
+            ),
+        )
+        .await
+        .expect("connect should not loop forever");
+
+        assert_eq!(
+            result.expect_err("spawn failure should surface"),
+            "spawn failed"
+        );
     }
 }

@@ -88,6 +88,14 @@ type ManualMemorySelection = {
   tags: string[];
 };
 
+type AdapterEngineInfo = {
+  type: EngineType;
+  installed: boolean;
+  version: string | null;
+  availabilityState?: 'loading' | 'ready' | 'requires-login' | 'unavailable';
+  availabilityLabelKey?: string | null;
+};
+
 function readStoredStreamingEnabled(): boolean {
   if (typeof window === 'undefined' || !window.localStorage) {
     return true;
@@ -131,7 +139,7 @@ export interface ChatInputBoxAdapterProps {
   selectedModelId: string | null;
   selectedEngine?: EngineType;
   isSharedSession?: boolean;
-  engines?: { type: EngineType; installed: boolean; version: string | null }[];
+  engines?: AdapterEngineInfo[];
   onSelectEngine?: (engine: EngineType) => void;
   models?: { id: string; displayName: string; model: string }[];
   onSelectModel?: (id: string) => void;
@@ -991,13 +999,13 @@ export const ChatInputBoxAdapter = memo(forwardRef<ChatInputBoxHandle, ChatInput
       if (!engines || engines.length === 0) {
         return undefined;
       }
-      const installedEngines = new Set(
-        (engines ?? [])
-          .filter((entry) => entry.installed)
-          .map((entry) => String(entry.type)),
-      );
+      const engineMap = new Map(engines.map((entry) => [entry.type, entry]));
       const isEngineEnabled = (engine: EngineType) =>
-        installedEngines.has(engine) &&
+        (
+          engineMap.get(engine)?.availabilityState
+            ? engineMap.get(engine)?.availabilityState === "ready"
+            : Boolean(engineMap.get(engine)?.installed)
+        ) &&
         (!isSharedSession || isSharedSessionSupportedEngine(engine));
       return {
         claude: isEngineEnabled('claude'),
@@ -1006,6 +1014,28 @@ export const ChatInputBoxAdapter = memo(forwardRef<ChatInputBoxHandle, ChatInput
         gemini: isEngineEnabled('gemini'),
       } as const;
     }, [engines, isSharedSession]);
+
+    const providerStatusLabels = useMemo(() => {
+      if (!engines || engines.length === 0) {
+        return undefined;
+      }
+
+      const byEngine = new Map(engines.map((entry) => [entry.type, entry]));
+      const resolveStatusLabel = (engineType: EngineType) => {
+        const engine = byEngine.get(engineType);
+        if (!engine?.availabilityLabelKey) {
+          return null;
+        }
+        return t(engine.availabilityLabelKey);
+      };
+
+      return {
+        claude: resolveStatusLabel('claude'),
+        codex: resolveStatusLabel('codex'),
+        opencode: resolveStatusLabel('opencode'),
+        gemini: resolveStatusLabel('gemini'),
+      } as const;
+    }, [engines, t]);
 
     const providerVersions = useMemo(() => {
       if (!engines || engines.length === 0) {
@@ -1221,6 +1251,8 @@ export const ChatInputBoxAdapter = memo(forwardRef<ChatInputBoxHandle, ChatInput
         currentProvider={engineToProvider(selectedEngine)}
         providerAvailability={providerAvailability}
         providerVersions={providerVersions}
+        providerStatusLabels={providerStatusLabels}
+        providerDisabledMessages={providerStatusLabels}
         activeFile={activeFile}
         selectedLines={selectedLines}
         onClearContext={onClearContext}

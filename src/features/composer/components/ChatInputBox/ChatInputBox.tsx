@@ -137,6 +137,8 @@ export const ChatInputBox = memo(forwardRef<ChatInputBoxHandle, ChatInputBoxProp
       currentProvider = 'claude',
       providerAvailability,
       providerVersions,
+      providerStatusLabels,
+      providerDisabledMessages,
       usagePercentage = 0,
       usageUsedTokens,
       usageMaxTokens,
@@ -1413,6 +1415,8 @@ export const ChatInputBox = memo(forwardRef<ChatInputBoxHandle, ChatInputBoxProp
               currentProvider={currentProvider}
               providerAvailability={providerAvailability}
               providerVersions={providerVersions}
+              providerStatusLabels={providerStatusLabels}
+              providerDisabledMessages={providerDisabledMessages}
               reasoningEffort={reasoningEffort}
               accountRateLimits={accountRateLimits}
               usageShowRemaining={usageShowRemaining}

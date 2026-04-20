@@ -14,6 +14,8 @@ vi.mock("react-i18next", () => ({
         "sidebar.sessionActionsGroup": "New Session",
         "sidebar.toggleSearch": "Toggle search",
         "sidebar.searchProjects": "Search projects",
+        "sidebar.activateWorkspace": "Open in main panel",
+        "sidebar.emptyWorkspaceSessions": "No sessions yet.",
         "sidebar.quickNewThread": "Home",
         "sidebar.quickAutomation": "Automation",
         "sidebar.quickSearch": "Search",
@@ -33,6 +35,9 @@ vi.mock("react-i18next", () => ({
         "sidebar.comingSoon": "Coming soon",
         "sidebar.comingSoonMessage": "This feature is coming soon",
         "sidebar.threadsSection": "Threads",
+        "threads.degradedWorkspaceRefreshAriaLabel": "Refresh incomplete thread list",
+        "threads.degradedWorkspaceRefreshTooltip":
+          "This project's thread list is not fully refreshed yet and may be missing some conversations. Click to refresh it again.",
         "settings.title": "Settings",
         "tabbar.primaryNavigation": "Primary navigation",
       };
@@ -59,6 +64,7 @@ const baseProps = {
   threadsByWorkspace: {},
   threadParentById: {},
   threadStatusById: {},
+  hydratedThreadListWorkspaceIds: new Set<string>(),
   threadListLoadingByWorkspace: {},
   threadListPagingByWorkspace: {},
   threadListCursorByWorkspace: {},
@@ -96,6 +102,7 @@ const baseProps = {
   onDeleteWorktree: vi.fn(),
   onLoadOlderThreads: vi.fn(),
   onReloadWorkspaceThreads: vi.fn(),
+  onQuickReloadWorkspaceThreads: vi.fn(),
   workspaceDropTargetRef: createRef<HTMLElement>(),
   isWorkspaceDropActive: false,
   workspaceDropText: "Drop Project Here",
@@ -411,6 +418,70 @@ describe("Sidebar", () => {
     expect(worktreeIcon?.classList.contains("is-session-running")).toBe(true);
   });
 
+  it("shows an empty session message instead of a loading skeleton for empty workspaces", () => {
+    const workspace = {
+      id: "ws-empty",
+      name: "empty-workspace",
+      path: "/tmp/empty-workspace",
+      connected: true,
+      kind: "main" as const,
+      settings: {
+        sidebarCollapsed: false,
+        worktreeSetupScript: null,
+      },
+    };
+
+    render(
+      <Sidebar
+        {...baseProps}
+        workspaces={[workspace]}
+        groupedWorkspaces={[
+          {
+            id: null,
+            name: "Ungrouped",
+            workspaces: [workspace],
+          },
+        ]}
+        hydratedThreadListWorkspaceIds={new Set(["ws-empty"])}
+        threadListLoadingByWorkspace={{ "ws-empty": true }}
+      />,
+    );
+
+    expect(screen.getByText("No sessions yet.")).toBeTruthy();
+    expect(screen.queryByLabelText("Loading agents")).toBeNull();
+  });
+
+  it("does not show the empty session message before the workspace thread list hydrates", () => {
+    const workspace = {
+      id: "ws-loading",
+      name: "loading-workspace",
+      path: "/tmp/loading-workspace",
+      connected: true,
+      kind: "main" as const,
+      settings: {
+        sidebarCollapsed: false,
+        worktreeSetupScript: null,
+      },
+    };
+
+    render(
+      <Sidebar
+        {...baseProps}
+        workspaces={[workspace]}
+        groupedWorkspaces={[
+          {
+            id: null,
+            name: "Ungrouped",
+            workspaces: [workspace],
+          },
+        ]}
+        threadListLoadingByWorkspace={{ "ws-loading": true }}
+      />,
+    );
+
+    expect(screen.queryByText("No sessions yet.")).toBeNull();
+  });
+
   it("does not render workspace or worktree session count badges", () => {
     const workspace = {
       id: "ws-root",
@@ -463,6 +534,228 @@ describe("Sidebar", () => {
 
     expect(container.querySelector(".workspace-session-signal")).toBeNull();
     expect(container.querySelector(".worktree-session-signal")).toBeNull();
+  });
+
+  it("renders a refresh icon on the workspace row when the thread list is incomplete", () => {
+    const workspace = {
+      id: "ws-root",
+      name: "codemoss",
+      path: "/tmp/codemoss",
+      connected: true,
+      kind: "main" as const,
+      settings: {
+        sidebarCollapsed: false,
+        worktreeSetupScript: null,
+      },
+    };
+
+    render(
+      <Sidebar
+        {...baseProps}
+        workspaces={[workspace]}
+        groupedWorkspaces={[
+          {
+            id: null,
+            name: "Ungrouped",
+            workspaces: [workspace],
+          },
+        ]}
+        threadsByWorkspace={{
+          "ws-root": [
+            {
+              id: "thread-1",
+              name: "Alpha",
+              updatedAt: 1000,
+              isDegraded: true,
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Refresh incomplete thread list" })).toBeTruthy();
+  });
+
+  it("bubbles worktree incomplete state up to the parent workspace row", () => {
+    const workspace = {
+      id: "ws-root",
+      name: "codemoss",
+      path: "/tmp/codemoss",
+      connected: true,
+      kind: "main" as const,
+      settings: {
+        sidebarCollapsed: false,
+        worktreeSetupScript: null,
+      },
+    };
+    const worktree = {
+      id: "ws-worktree",
+      name: "codemoss/worktree",
+      path: "/tmp/codemoss-worktree",
+      connected: true,
+      parentId: "ws-root",
+      kind: "worktree" as const,
+      settings: {
+        sidebarCollapsed: false,
+        worktreeSetupScript: null,
+      },
+      worktree: {
+        branch: "feature/incomplete",
+      },
+    };
+
+    render(
+      <Sidebar
+        {...baseProps}
+        workspaces={[workspace, worktree]}
+        groupedWorkspaces={[
+          {
+            id: null,
+            name: "Ungrouped",
+            workspaces: [workspace],
+          },
+        ]}
+        threadsByWorkspace={{
+          "ws-worktree": [
+            {
+              id: "thread-1",
+              name: "Alpha",
+              updatedAt: 1000,
+              partialSource: "local-session-scan-unavailable",
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(screen.getAllByRole("button", { name: "Refresh incomplete thread list" }).length).toBe(
+      2,
+    );
+  });
+
+  it("refreshes the degraded workspace directly from the refresh icon", () => {
+    const workspace = {
+      id: "ws-root",
+      name: "codemoss",
+      path: "/tmp/codemoss",
+      connected: true,
+      kind: "main" as const,
+      settings: {
+        sidebarCollapsed: false,
+        worktreeSetupScript: null,
+      },
+    };
+    const onQuickReloadWorkspaceThreads = vi.fn();
+
+    render(
+      <Sidebar
+        {...baseProps}
+        onQuickReloadWorkspaceThreads={onQuickReloadWorkspaceThreads}
+        workspaces={[workspace]}
+        groupedWorkspaces={[
+          {
+            id: null,
+            name: "Ungrouped",
+            workspaces: [workspace],
+          },
+        ]}
+        threadsByWorkspace={{
+          "ws-root": [
+            {
+              id: "thread-1",
+              name: "Alpha",
+              updatedAt: 1000,
+              isDegraded: true,
+            },
+          ],
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Refresh incomplete thread list" }));
+    expect(onQuickReloadWorkspaceThreads).toHaveBeenCalledWith("ws-root");
+  });
+
+  it("shows a spinning refresh icon while degraded threads are reloading", () => {
+    const workspace = {
+      id: "ws-root",
+      name: "codemoss",
+      path: "/tmp/codemoss",
+      connected: true,
+      kind: "main" as const,
+      settings: {
+        sidebarCollapsed: false,
+        worktreeSetupScript: null,
+      },
+    };
+
+    const { container } = render(
+      <Sidebar
+        {...baseProps}
+        workspaces={[workspace]}
+        groupedWorkspaces={[
+          {
+            id: null,
+            name: "Ungrouped",
+            workspaces: [workspace],
+          },
+        ]}
+        threadListLoadingByWorkspace={{ "ws-root": true }}
+        threadsByWorkspace={{
+          "ws-root": [
+            {
+              id: "thread-1",
+              name: "Alpha",
+              updatedAt: 1000,
+              isDegraded: true,
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(container.querySelector(".sidebar-refresh-icon.is-spinning")).toBeTruthy();
+  });
+
+  it("hides the degraded refresh action when no quick reload handler is available", () => {
+    const workspace = {
+      id: "ws-root",
+      name: "codemoss",
+      path: "/tmp/codemoss",
+      connected: true,
+      kind: "main" as const,
+      settings: {
+        sidebarCollapsed: false,
+        worktreeSetupScript: null,
+      },
+    };
+
+    render(
+      <Sidebar
+        {...baseProps}
+        onQuickReloadWorkspaceThreads={undefined}
+        workspaces={[workspace]}
+        groupedWorkspaces={[
+          {
+            id: null,
+            name: "Ungrouped",
+            workspaces: [workspace],
+          },
+        ]}
+        threadsByWorkspace={{
+          "ws-root": [
+            {
+              id: "thread-1",
+              name: "Alpha",
+              updatedAt: 1000,
+              isDegraded: true,
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: "Refresh incomplete thread list" })).toBeNull();
   });
 
   it("keeps group collapse on double click only", () => {
@@ -628,6 +921,43 @@ describe("Sidebar", () => {
 
     expect(onToggleWorkspaceCollapse).not.toHaveBeenCalled();
     expect(onSelectWorkspace).not.toHaveBeenCalled();
+  });
+
+  it("activates the workspace from the explicit main-panel action without toggling collapse", () => {
+    const workspace = {
+      id: "ws-1",
+      name: "codemoss",
+      path: "/tmp/codemoss",
+      connected: true,
+      kind: "main" as const,
+      settings: {
+        sidebarCollapsed: true,
+        worktreeSetupScript: null,
+      },
+    };
+    const onSelectWorkspace = vi.fn();
+    const onToggleWorkspaceCollapse = vi.fn();
+
+    render(
+      <Sidebar
+        {...baseProps}
+        workspaces={[workspace]}
+        groupedWorkspaces={[
+          {
+            id: null,
+            name: "Ungrouped",
+            workspaces: [workspace],
+          },
+        ]}
+        onSelectWorkspace={onSelectWorkspace}
+        onToggleWorkspaceCollapse={onToggleWorkspaceCollapse}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Open in main panel" }));
+
+    expect(onSelectWorkspace).toHaveBeenCalledWith("ws-1");
+    expect(onToggleWorkspaceCollapse).not.toHaveBeenCalled();
   });
 
   it("shows tooltips for the add workspace and workspace actions icons", async () => {

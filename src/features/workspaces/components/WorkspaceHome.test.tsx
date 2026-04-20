@@ -63,6 +63,21 @@ describe("WorkspaceHome", () => {
       .toContain("工作树(feature/worktree-home)");
   });
 
+  it("normalizes Windows paths when rendering the workspace summary", () => {
+    const { container } = renderWorkspaceHome(
+      {
+        ...baseWorkspace,
+        path: "C:\\Users\\demo\\Desktop\\desktop-cc-gui",
+      },
+      "feature/ref-layout",
+    );
+
+    expect(container.querySelector(".workspace-home-path-line")?.textContent)
+      .toBe("C:/Users/demo/Desktop/desktop-cc-gui");
+    expect(container.querySelector(".workspace-home-path-name")?.textContent)
+      .toBe("desktop-cc-gui");
+  });
+
   it("does not render an unknown branch placeholder when branch data is unavailable", () => {
     const { container } = renderWorkspaceHome(baseWorkspace, null);
 

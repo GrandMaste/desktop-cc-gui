@@ -12,13 +12,7 @@ vi.mock("react-i18next", () => ({
         "app.subtitle": "Your AI coding companion",
         "home.welcome": "Welcome",
         "home.subtitle": "What would you like to build today?",
-        "home.latestActivity": "Recent Conversations",
-        "home.noActivity": "No recent conversations",
-        "home.agentReplied": "Agent replied.",
-        "home.running": "Running",
         "home.openProject": "Add project",
-        "home.addWorkspace": "Add workspace",
-        "home.loadingAgents": "Loading agents",
       };
       return translations[key] || key;
     },
@@ -35,43 +29,24 @@ const baseProps = {
 };
 
 describe("Home", () => {
-  it("renders latest agent runs and lets you open a thread", () => {
-    const onSelectThread = vi.fn();
-    render(
-      <Home
-        {...baseProps}
-        latestAgentRuns={[
-          {
-            message: "Ship the dashboard refresh",
-            timestamp: Date.now(),
-            projectName: "ccgui",
-            groupName: "Frontend",
-            workspaceId: "workspace-1",
-            threadId: "thread-1",
-            isProcessing: true,
-          },
-        ]}
-        onSelectThread={onSelectThread}
-      />,
-    );
-
-    expect(screen.getByText("Recent Conversations")).toBeTruthy();
-    expect(screen.getByText("Frontend")).toBeTruthy();
-    const projectName = screen.getByText("ccgui", { selector: ".home-recent-project" });
-    expect(projectName).toBeTruthy();
-    const message = screen.getByText("Ship the dashboard refresh");
-    const card = message.closest("button");
-    expect(card).toBeTruthy();
-    if (!card) {
-      throw new Error("Expected latest agent card button");
-    }
-    fireEvent.click(card);
-    expect(onSelectThread).toHaveBeenCalledWith("workspace-1", "thread-1");
-  });
-
-  it("shows the empty state when there are no latest runs", () => {
+  it("renders the hero copy and add-project action", () => {
     render(<Home {...baseProps} />);
 
-    expect(screen.getByText("No recent conversations")).toBeTruthy();
+    expect(screen.getByText("Welcome")).toBeTruthy();
+    expect(screen.getByText("What would you like to build today?")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Add project" })).toBeTruthy();
+  });
+
+  it("opens the project picker from the main action", () => {
+    const onOpenProject = vi.fn();
+    const { container } = render(<Home {...baseProps} onOpenProject={onOpenProject} />);
+
+    const actionButton = container.querySelector(".home-primary-button");
+    expect(actionButton).toBeTruthy();
+    if (!actionButton) {
+      throw new Error("Expected home primary action button");
+    }
+    fireEvent.click(actionButton);
+    expect(onOpenProject).toHaveBeenCalledTimes(1);
   });
 });

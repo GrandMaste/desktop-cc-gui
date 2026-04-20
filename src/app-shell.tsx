@@ -69,16 +69,17 @@ import { useWorktreePrompt } from "./features/workspaces/hooks/useWorktreePrompt
 import { useClonePrompt } from "./features/workspaces/hooks/useClonePrompt";
 import { useWorkspaceController } from "./features/app/hooks/useWorkspaceController";
 import { useWorkspaceSelection } from "./features/workspaces/hooks/useWorkspaceSelection";
+import { useWorkspaceSessionProjectionSummary } from "./features/workspaces/hooks/useWorkspaceSessionProjectionSummary";
 import { useWorkspaceSessionActivity } from "./features/session-activity/hooks/useWorkspaceSessionActivity";
 import { useSessionRadarFeed } from "./features/session-activity/hooks/useSessionRadarFeed";
 import { useLiveEditPreview } from "./features/live-edit-preview/hooks/useLiveEditPreview";
 import { useGitHubPanelController } from "./features/app/hooks/useGitHubPanelController";
 import { useSettingsModalState } from "./features/app/hooks/useSettingsModalState";
+import { useLoadingProgressDialogState } from "./features/app/hooks/useLoadingProgressDialogState";
 import { usePersistComposerSettings } from "./features/app/hooks/usePersistComposerSettings";
 import { useSyncSelectedDiffPath } from "./features/app/hooks/useSyncSelectedDiffPath";
 import { useMenuAcceleratorController } from "./features/app/hooks/useMenuAcceleratorController";
 import { useAppMenuEvents } from "./features/app/hooks/useAppMenuEvents";
-import { shouldSkipWorkspaceThreadListLoad } from "./app-shell-parts/workspaceThreadListLoadGuard";
 import { useWorkspaceActions } from "./features/app/hooks/useWorkspaceActions";
 import { useWorkspaceCycling } from "./features/app/hooks/useWorkspaceCycling";
 import { useThreadRows } from "./features/app/hooks/useThreadRows";
@@ -173,6 +174,7 @@ import { useAppShellSearchAndComposerSection } from "./app-shell-parts/useAppShe
 import { useAppShellSections } from "./app-shell-parts/useAppShellSections";
 import { useAppShellLayoutNodesSection } from "./app-shell-parts/useAppShellLayoutNodesSection";
 import { renderAppShell } from "./app-shell-parts/renderAppShell";
+import { useWorkspaceThreadListHydration } from "./app-shell-parts/useWorkspaceThreadListHydration";
 import {
   getEffectiveModels,
   getEffectiveReasoningSupported,
@@ -371,6 +373,12 @@ export function AppShell() {
     openSettings,
     closeSettings,
   } = useSettingsModalState();
+  const {
+    loadingProgressDialog,
+    showLoadingProgressDialog,
+    hideLoadingProgressDialog,
+    dismissLoadingProgressDialog,
+  } = useLoadingProgressDialogState();
 
   const handleOpenModelSettings = useCallback(
     (providerId?: string) => {
@@ -676,6 +684,7 @@ export function AppShell() {
   const { skills } = useSkills({ activeWorkspace, onDebug: addDebugEntry });
   const {
     activeEngine,
+    availableEngines,
     installedEngines,
     setActiveEngine,
     engineModelsAsOptions,
@@ -863,6 +872,7 @@ export function AppShell() {
     gitignoredFiles,
     gitignoredDirectories,
     isLoading: isFilesLoading,
+    loadError: fileTreeLoadError,
     refreshFiles,
   } = useWorkspaceFiles({
     activeWorkspace,
@@ -1082,6 +1092,7 @@ export function AppShell() {
     startSpecRoot,
     startStatus,
     startContext,
+    startCompact,
     startFast,
     startMode,
     startExport,
@@ -1309,73 +1320,6 @@ export function AppShell() {
       resolvedModel,
       sendUserMessage,
     ],
-  );
-  const hydratedThreadListWorkspaceIdsRef = useRef(new Set<string>());
-  const listThreadsForWorkspaceTracked = useCallback(
-    async (
-      workspace: WorkspaceInfo,
-      options?: {
-        preserveState?: boolean;
-        includeOpenCodeSessions?: boolean;
-      },
-    ) => {
-      await listThreadsForWorkspace(workspace, options);
-      hydratedThreadListWorkspaceIdsRef.current.add(workspace.id);
-    },
-    [listThreadsForWorkspace],
-  );
-  const ensureWorkspaceThreadListLoaded = useCallback(
-    (
-      workspaceId: string,
-      options?: { preserveState?: boolean; force?: boolean },
-    ) => {
-      const workspace = workspacesById.get(workspaceId);
-      if (!workspace) {
-        return;
-      }
-      const force = options?.force ?? false;
-      const isLoading = threadListLoadingByWorkspace[workspaceId] ?? false;
-      const hasHydratedThreadList =
-        hydratedThreadListWorkspaceIdsRef.current.has(workspaceId);
-      if (
-        shouldSkipWorkspaceThreadListLoad({
-          force,
-          isLoading,
-          hasHydratedThreadList,
-        })
-      ) {
-        return;
-      }
-      void listThreadsForWorkspaceTracked(workspace, {
-        preserveState: options?.preserveState,
-      });
-    },
-    [
-      listThreadsForWorkspaceTracked,
-      threadListLoadingByWorkspace,
-      workspacesById,
-    ],
-  );
-  const autoHydratedActiveWorkspaceIdRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (!activeWorkspaceId) {
-      autoHydratedActiveWorkspaceIdRef.current = null;
-      return;
-    }
-    if (autoHydratedActiveWorkspaceIdRef.current === activeWorkspaceId) {
-      return;
-    }
-    autoHydratedActiveWorkspaceIdRef.current = activeWorkspaceId;
-    ensureWorkspaceThreadListLoaded(activeWorkspaceId, { preserveState: true });
-  }, [activeWorkspaceId, ensureWorkspaceThreadListLoaded]);
-  const handleEnsureWorkspaceThreadsForSettings = useCallback(
-    (workspaceId: string) => {
-      ensureWorkspaceThreadListLoaded(workspaceId, {
-        preserveState: false,
-        force: true,
-      });
-    },
-    [ensureWorkspaceThreadListLoaded],
   );
   const {
     activeAccount,
@@ -2016,6 +1960,7 @@ export function AppShell() {
     startSpecRoot,
     startStatus,
     startContext,
+    startCompact,
     startFast,
     startMode,
     startExport,
@@ -2113,9 +2058,50 @@ export function AppShell() {
     () => (activePath ? kanbanTasks.filter((task) => task.workspaceId === activePath) : []),
     [activePath, kanbanTasks],
   );
+  const activeProjectionSummaryQuery = useMemo(
+    () => ({ status: "active" as const }),
+    [],
+  );
+  const { summary: activeWorkspaceProjectionSummary } = useWorkspaceSessionProjectionSummary({
+    workspaceId: activeWorkspaceId,
+    query: activeProjectionSummaryQuery,
+    enabled: Boolean(activeWorkspaceId),
+  });
+  const activeWorkspaceProjectionOwnerIds = useMemo(() => {
+    if (!activeWorkspaceId) {
+      return [] as string[];
+    }
+    const ownerWorkspaceIds = activeWorkspaceProjectionSummary?.ownerWorkspaceIds ?? [];
+    if (ownerWorkspaceIds.length === 0) {
+      return [activeWorkspaceId];
+    }
+    return ownerWorkspaceIds;
+  }, [activeWorkspaceId, activeWorkspaceProjectionSummary?.ownerWorkspaceIds]);
+  const {
+    ensureWorkspaceThreadListLoaded,
+    hydratedThreadListWorkspaceIdsRef,
+    listThreadsForWorkspaceTracked,
+  } = useWorkspaceThreadListHydration({
+    activeWorkspaceId,
+    activeWorkspaceProjectionOwnerIds,
+    listThreadsForWorkspace,
+    threadListLoadingByWorkspace,
+    workspaces,
+    workspacesById,
+  });
+  const handleEnsureWorkspaceThreadsForSettings = useCallback(
+    (workspaceId: string) => {
+      ensureWorkspaceThreadListLoaded(workspaceId, {
+        preserveState: false,
+        force: true,
+      });
+    },
+    [ensureWorkspaceThreadListLoaded],
+  );
   const activeWorkspaceThreads = useMemo(
-    () => (activeWorkspaceId ? threadsByWorkspace[activeWorkspaceId] ?? [] : []),
-    [activeWorkspaceId, threadsByWorkspace],
+    () =>
+      activeWorkspaceProjectionOwnerIds.flatMap((workspaceId) => threadsByWorkspace[workspaceId] ?? []),
+    [activeWorkspaceProjectionOwnerIds, threadsByWorkspace],
   );
   const workspaceActivity = useWorkspaceSessionActivity({
     activeThreadId,
@@ -2126,21 +2112,26 @@ export function AppShell() {
   });
   const RECENT_THREAD_LIMIT = 8;
   const recentThreads = useMemo(() => {
-    if (!activeWorkspaceId) {
+    if (!activeWorkspaceId || activeWorkspaceProjectionOwnerIds.length === 0) {
       return [];
     }
-    const threads = threadsByWorkspace[activeWorkspaceId] ?? [];
+    const threads = activeWorkspaceProjectionOwnerIds.flatMap((workspaceId) =>
+      (threadsByWorkspace[workspaceId] ?? []).map((thread) => ({
+        thread,
+        ownerWorkspaceId: workspaceId,
+      })),
+    );
     if (threads.length === 0) {
       return [];
     }
     return [...threads]
-      .sort((left, right) => right.updatedAt - left.updatedAt)
+      .sort((left, right) => right.thread.updatedAt - left.thread.updatedAt)
       .slice(0, RECENT_THREAD_LIMIT)
-      .map((thread) => {
+      .map(({ thread, ownerWorkspaceId }) => {
         const status = threadStatusById[thread.id];
         return {
           id: thread.id,
-          workspaceId: activeWorkspaceId,
+          workspaceId: ownerWorkspaceId,
           threadId: thread.id,
           title: thread.name?.trim() || t("threads.untitledThread"),
           updatedAt: thread.updatedAt,
@@ -2148,7 +2139,7 @@ export function AppShell() {
           isReviewing: status?.isReviewing ?? false,
         };
       });
-  }, [activeWorkspaceId, threadStatusById, threadsByWorkspace, t]);
+  }, [activeWorkspaceId, activeWorkspaceProjectionOwnerIds, threadStatusById, threadsByWorkspace, t]);
   useEffect(() => {
     if (!activeWorkspaceId) {
       return;
@@ -2632,6 +2623,8 @@ export function AppShell() {
     openWorktreePrompt,
     openClonePrompt,
     composerInputRef,
+    showLoadingProgressDialog,
+    hideLoadingProgressDialog,
     onDebug: addDebugEntry,
   });
 
@@ -2801,7 +2794,7 @@ export function AppShell() {
     dragHandle, editorHighlightTarget, editorNavigationTarget, editorSplitLayout, effectiveModels, effectiveReasoningSupported, effectiveRuntimeMode, effectiveSelectedModel,
     effectiveSelectedModelId, effectiveUiMode, engineModelsAsOptions, engineSelectedModelIdByType, engineSelection, engineStatuses, ensureLaunchTerminal, ensureTerminalWithTitle,
     ensureWorkspaceThreadListLoaded, entry, errorToasts, existing, exitDiffView, expandRightPanel, expandSidebar, filePanelMode,
-    filePassword, fileReferenceMode, fileStatus, files, finishedByAgentUpdate, finishedByDuration, firstAnswer, flushDraggedHeight,
+    filePassword, fileReferenceMode, fileStatus, fileTreeLoadError, files, finishedByAgentUpdate, finishedByDuration, firstAnswer, flushDraggedHeight,
     force, forkThreadForWorkspace, forkSessionFromMessageForWorkspace, forkClaudeSessionFromMessageForWorkspace, getGlobalPromptsDir, getPinTimestamp, getThreadRows, getWorkspaceGroupName, getWorkspacePromptsDir, gitCommitDiffs,
     gitDiffListView, gitDiffViewStyle, gitHistoryPanelHeight, gitHistoryPanelHeightRef, gitIssues, gitIssuesError, gitIssuesLoading, gitIssuesTotal,
     gitLogAhead, gitLogAheadEntries, gitLogBehind, gitLogBehindEntries, gitLogEntries, gitLogError, gitLogLoading, gitLogTotal,
@@ -2821,7 +2814,7 @@ export function AppShell() {
     handleSync, handleTestNotificationSound, handleToggleDictation, handleToggleRuntimeConsole, handleToggleTerminal, handleToggleTerminalPanel, handleUnlockPanel, handleUnstageGitFile,
     handleUpdatePrompt, handleUserInputSubmit, handleUserInputSubmitWithPlanApply, handleExitPlanModeExecute, handleWorkspaceDragEnter, handleWorkspaceDragLeave, handleWorkspaceDragOver, handleWorkspaceDrop, handleWorktreeCreated,
     hasActivePlan, hasLoaded, hasPlanData, highlightedBranchIndex, highlightedCommitIndex, highlightedPresetIndex, historySearchItems, hydratedThreadListWorkspaceIdsRef,
-    installedEngines, interruptTurn, isCompact, isDeleteThreadPromptBusy, isEditorFileMaximized, isFilesLoading, isLoadingLatestAgents, isMacDesktop,
+    availableEngines, installedEngines, interruptTurn, isCompact, isDeleteThreadPromptBusy, isEditorFileMaximized, isFilesLoading, isLoadingLatestAgents, isMacDesktop,
     isPanelLocked, isPhone, isPlanMode, isPlanPanelDismissed, isProcessing, isProcessingNow, isReviewing, isSearchPaletteOpen,
     isTablet, isThreadAutoNaming, isThreadPinned, isValid, isWindowsDesktop, isWorkspaceDropActive, isWorktreeWorkspace, kanbanConversationWidth,
     kanbanCreatePanel, kanbanCreateTask, kanbanDeletePanel, kanbanDeleteTask, kanbanPanels, kanbanReorderTask, kanbanTasks, kanbanUpdatePanel,
@@ -2853,7 +2846,7 @@ export function AppShell() {
     setGitPanelMode, setGitRootScanDepth, setGlobalSearchFilesByWorkspace, setHighlightedBranchIndex, setHighlightedCommitIndex, setHighlightedPresetIndex, setIsEditorFileMaximized, setIsPanelLocked,
     setIsPlanPanelDismissed, setIsSearchPaletteOpen, setKanbanViewState, setLiveEditPreviewEnabled, setPrefillDraft, setReduceTransparency, setRightPanelWidth, setSearchContentFilters, setSearchPaletteQuery, setSearchPaletteSelectedIndex, setSearchScope,
     setSelectedCollaborationModeId, setSelectedCommitSha, setSelectedDiffPath, setSelectedEffort, setSelectedKanbanTaskId, setSelectedModelId, setSelectedPullRequest,
-    setHomeOpen, setWorkspaceHomeWorkspaceId, settingsHighlightTarget, settingsOpen, settingsSection, shouldForceResumeInCode, shouldImplementPlan, shouldLoadDiffs, shouldLoadGitHubPanelData,
+    setHomeOpen, setWorkspaceHomeWorkspaceId, settingsHighlightTarget, settingsOpen, settingsSection, loadingProgressDialog, dismissLoadingProgressDialog, shouldForceResumeInCode, shouldImplementPlan, shouldLoadDiffs, shouldLoadGitHubPanelData,
     showDebugButton, showGitHistory, showHome, showKanban, showNextReleaseNotes, showPresetStep, showPreviousReleaseNotes, showWorkspaceHome,
     sidebarCollapsed, sidebarWidth, skills, snapshot, startExport, startFast, startFork, startHeight,
     startImport, startLsp, startMcp, startMode, startResume, startReview, startShare, startSpecRoot,

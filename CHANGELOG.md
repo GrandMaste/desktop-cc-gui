@@ -2,6 +2,90 @@
 
 ---
 
+##### **2026年4月20日（v0.4.5）**
+
+中文：
+
+✨ Features
+- 新增全局会话归档中心，支持跨项目聚合查看历史会话，并收紧 Codex 配置边界，降低多入口配置漂移风险
+- 新增会话恢复诊断与降级承接链路，在 runtime 断连、线程失效或恢复失败时提供更明确的状态解释与后续操作入口
+- 新增加载进度弹窗，支持工作区打开、添加项目与创建会话等长耗时操作的进度提示、后台运行与多请求可见性管理
+- 增强引擎可用性状态透传，区分检测中、可用、需登录与不可用状态，并同步到侧栏、引擎选择器和输入区 provider selector
+
+🔧 Improvements
+- 收敛设置页实验区入口，将续写、融合等能力命名与归属统一到更清晰的配置结构
+- 优化 Codex 实验配置展示与跨平台配置入口，减少不同系统环境下的入口差异与误导
+- 加固 Claude 手动压缩与会话恢复边界，减少 compact、恢复、重发等长链路操作中的状态漂移
+- 同步 OpenSpec 中的 runtime 稳定性与 Claude compact 实施进度，让发布说明、任务状态与实际实现保持一致
+- 优化侧栏线程列表降级恢复入口，将 thread 级降级提示收口到 workspace/worktree 级快速刷新，并支持主工作区联动刷新其 worktree 线程列表
+
+🐛 Fixes
+- 修复会话管理边界处理问题，并补齐全量回归夹具，提升归档、聚合与路由场景的稳定性
+- 修复工作树中新建会话入口交互异常，避免用户从侧栏进入新会话时出现状态错位
+- 修复工作区文件树刷新不稳定问题，避免目录节点、独立文件窗口与工作区文件状态在刷新后不同步
+- 修复 Opencode 子进程终止与超时收敛边界，降低异常退出、超时清理和会话回收中的残留风险
+- 修复 Codex 会话自恢复、零活动超时兜底与 runtime 重连场景中的诊断缺口，提升断链后的可恢复性
+- 修复会话创建失败时缺少用户可见反馈的问题，确保失败后关闭加载弹窗、记录诊断并展示错误提示
+- 修复 OpenCode provider health 探测失败后菜单状态可能卡在 loading 的问题，并补齐 Windows 路径 basename 等边界测试
+- 修复侧栏快速刷新按钮在缺少 handler 时仍可见的空操作边界，并补齐 Windows 反斜杠路径下 Worktree 名称拆分展示
+
+English:
+
+✨ Features
+- Add a global session archive center for cross-project history aggregation, while tightening Codex configuration boundaries to reduce configuration drift across entry points
+- Add session recovery diagnostics and fallback handoff paths so runtime disconnects, stale threads, and failed recovery attempts provide clearer state and next-action guidance
+- Add a loading progress dialog for long-running workspace open, add-project, and session-creation operations, with background-running support and multi-request visibility management
+- Improve engine availability propagation by distinguishing loading, ready, requires-login, and unavailable states across the sidebar, engine selector, and input provider selector
+
+🔧 Improvements
+- Consolidate the Settings experimental area and align naming/ownership for continuation and fusion capabilities into a clearer configuration structure
+- Refine Codex experimental settings and cross-platform configuration entry points to reduce platform-specific ambiguity
+- Harden Claude manual compact and session-recovery boundaries to reduce state drift across compact, recovery, and resend flows
+- Sync OpenSpec progress for runtime stability and Claude compact implementation so release notes, task state, and delivered behavior stay aligned
+- Improve sidebar degraded-thread recovery by moving thread-level degraded hints to workspace/worktree quick reload actions, with parent workspace refresh cascading to worktrees
+
+🐛 Fixes
+- Fix session-management boundary handling and add full regression fixtures to improve stability across archive, aggregation, and routing scenarios
+- Fix the worktree new-session entry interaction so sidebar-launched sessions no longer drift into an incorrect state
+- Fix unstable workspace file-tree refreshes so directory nodes, detached file windows, and workspace file state stay synchronized after refresh
+- Fix Opencode subprocess termination and timeout convergence to reduce leftover process risk during abnormal exits, timeout cleanup, and session recycling
+- Fix diagnostic gaps in Codex session self-recovery, zero-activity timeout fallback, and runtime reconnect scenarios to improve recoverability after disconnects
+- Fix missing user-visible feedback when session creation fails, ensuring the loading dialog closes, diagnostics are recorded, and an error message is shown
+- Fix OpenCode provider health-check failures leaving menu state stuck on loading, and add boundary coverage for Windows path basename extraction
+- Fix sidebar quick-reload buttons appearing without handlers, and correct Worktree name splitting for Windows backslash paths
+
+---
+
+##### **2026年4月20日（v0.4.4）**
+
+中文：
+
+✨ Features
+- 新增项目范围会话管理能力，支持按项目聚合会话并进行归属路由，让项目内历史会话更容易集中管理
+
+🔧 Improvements
+- 收口启动期图标懒加载链路，减少启动阶段不必要的资源开销，提升首屏进入稳定性
+- 归档项目会话管理范围修正提案，使行为说明与已落地实现保持一致
+
+🐛 Fixes
+- 修复空项目会话重复加载问题，避免无会话项目反复触发无效刷新
+- 修复图标懒加载回归，避免启动阶段因资源加载路径变化导致图标展示异常
+
+English:
+
+✨ Features
+- Add project-scoped session management with project-level aggregation and attribution routing, making in-project session history easier to manage
+
+🔧 Improvements
+- Tighten the startup icon lazy-loading path to reduce unnecessary startup overhead and improve first-screen stability
+- Archive the project-session-management scope correction proposal so behavior docs stay aligned with the delivered implementation
+
+🐛 Fixes
+- Fix repeated loading for projects with no sessions, preventing empty projects from triggering redundant refresh loops
+- Fix an icon lazy-loading regression so startup resource-path changes no longer break icon rendering
+
+---
+
 ##### **2026年4月18日（v0.4.3）**
 
 中文：

@@ -426,6 +426,123 @@ describe("SettingsView Display", () => {
     expect(screen.getByRole("button", { name: "settings.sidebarWebService" })).toBeTruthy();
   });
 
+  it("removes the dead multi-agent toggle and explains local-vs-official ownership", async () => {
+    cleanup();
+    render(
+      <SettingsView
+        reduceTransparency={false}
+        onToggleTransparency={vi.fn()}
+        appSettings={baseSettings}
+        openAppIconById={{}}
+        onUpdateAppSettings={vi.fn().mockResolvedValue(undefined)}
+        workspaceGroups={[]}
+        groupedWorkspaces={[
+          {
+            id: null,
+            name: "Ungrouped",
+            workspaces: [
+              {
+                ...workspaceA,
+                settings: {
+                  ...workspaceA.settings,
+                  codexHome: "/tmp/custom-codex-home",
+                },
+              },
+            ],
+          },
+        ]}
+        ungroupedLabel="Ungrouped"
+        onClose={vi.fn()}
+        onMoveWorkspace={vi.fn()}
+        onDeleteWorkspace={vi.fn()}
+        onCreateWorkspaceGroup={vi.fn().mockResolvedValue(null)}
+        onRenameWorkspaceGroup={vi.fn().mockResolvedValue(null)}
+        onMoveWorkspaceGroup={vi.fn().mockResolvedValue(null)}
+        onDeleteWorkspaceGroup={vi.fn().mockResolvedValue(null)}
+        onAssignWorkspaceGroup={vi.fn().mockResolvedValue(null)}
+        onRunDoctor={vi.fn().mockResolvedValue(createDoctorResult())}
+        activeWorkspace={null}
+        activeEngine="codex"
+        onUpdateWorkspaceCodexBin={vi.fn().mockResolvedValue(undefined)}
+        onUpdateWorkspaceSettings={vi.fn().mockResolvedValue(undefined)}
+        scaleShortcutTitle="Scale shortcut"
+        scaleShortcutText="Use Command +/-"
+        onTestNotificationSound={vi.fn()}
+        dictationModelStatus={null}
+        onDownloadDictationModel={vi.fn()}
+        onCancelDictationDownload={vi.fn()}
+        onRemoveDictationModel={vi.fn()}
+        initialSection="experimental"
+      />,
+    );
+
+    await flushSettingsViewEffects();
+
+    expect(screen.queryByText("Multi-agent")).toBeNull();
+    expect(screen.getByText(/Only Background terminal syncs/)).toBeTruthy();
+    expect(screen.getByText(/Collaboration modes and Steer mode stay/)).toBeTruthy();
+    expect(screen.getByText("Open the official Codex config in File Manager.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Open in File Manager" })).toBeTruthy();
+  });
+
+  it("adds recommendation markers for experimental toggles", async () => {
+    cleanup();
+    render(
+      <SettingsView
+        reduceTransparency={false}
+        onToggleTransparency={vi.fn()}
+        appSettings={baseSettings}
+        openAppIconById={{}}
+        onUpdateAppSettings={vi.fn().mockResolvedValue(undefined)}
+        workspaceGroups={[]}
+        groupedWorkspaces={[]}
+        ungroupedLabel="Ungrouped"
+        onClose={vi.fn()}
+        onMoveWorkspace={vi.fn()}
+        onDeleteWorkspace={vi.fn()}
+        onCreateWorkspaceGroup={vi.fn().mockResolvedValue(null)}
+        onRenameWorkspaceGroup={vi.fn().mockResolvedValue(null)}
+        onMoveWorkspaceGroup={vi.fn().mockResolvedValue(null)}
+        onDeleteWorkspaceGroup={vi.fn().mockResolvedValue(null)}
+        onAssignWorkspaceGroup={vi.fn().mockResolvedValue(null)}
+        onRunDoctor={vi.fn().mockResolvedValue(createDoctorResult())}
+        activeWorkspace={workspaceA}
+        activeEngine="codex"
+        onUpdateWorkspaceCodexBin={vi.fn().mockResolvedValue(undefined)}
+        onUpdateWorkspaceSettings={vi.fn().mockResolvedValue(undefined)}
+        scaleShortcutTitle="Scale shortcut"
+        scaleShortcutText="Use Command +/-"
+        onTestNotificationSound={vi.fn()}
+        dictationModelStatus={null}
+        onDownloadDictationModel={vi.fn()}
+        onCancelDictationDownload={vi.fn()}
+        onRemoveDictationModel={vi.fn()}
+        initialSection="experimental"
+      />,
+    );
+
+    await flushSettingsViewEffects();
+
+    expect(screen.getByText("Recommended")).toBeTruthy();
+    expect(screen.getByText("Official config")).toBeTruthy();
+    expect(screen.getByText("Available")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "This already feeds the main interaction path and is enabled by default; keep it on if you want Plan mode.",
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        "This is the only experimental item that syncs to the official CODEX_HOME/config.toml. Turn it on only when you need long-running background commands.",
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        "This is already wired into same-run continuation, queued send, and queue fusion. Turn it on if you often keep asking follow-ups while an answer is still streaming.",
+      ),
+    ).toBeTruthy();
+  });
+
   it("renders codex doctor probe metadata including proxy context", async () => {
     cleanup();
     const onRunDoctor = vi.fn().mockResolvedValue({

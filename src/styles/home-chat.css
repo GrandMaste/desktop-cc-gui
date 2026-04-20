@@ -474,7 +474,9 @@
   width: min(700px, 100%);
   margin: 0 auto;
   display: flex;
+  flex-direction: column;
   justify-content: center;
+  gap: 18px;
 }
 
 .home-chat-composer-panel {

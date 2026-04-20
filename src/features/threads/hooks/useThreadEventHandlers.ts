@@ -13,6 +13,7 @@ import { useThreadTurnEvents } from "./useThreadTurnEvents";
 import { useThreadUserInputEvents } from "./useThreadUserInputEvents";
 import { stripBackendErrorPrefix } from "../utils/networkErrors";
 import { captureClaudeMcpRuntimeSnapshotFromRaw } from "../utils/claudeMcpRuntimeSnapshot";
+import { buildThreadDebugCorrelation } from "../utils/threadDebugCorrelation";
 import type { ThreadAction } from "./useThreadsReducer";
 import { isDebugLightPathEnabled } from "../utils/realtimePerfFlags";
 
@@ -263,7 +264,20 @@ export function useThreadEventHandlers({
         timestamp: Date.now(),
         source: "event",
         label: `thread/session:turn-diagnostic:${label}`,
-        payload,
+        payload: buildThreadDebugCorrelation(
+          {
+            workspaceId:
+              typeof payload.workspaceId === "string" ? payload.workspaceId : null,
+            threadId:
+              typeof payload.threadId === "string" ? payload.threadId : null,
+            action: `turn-diagnostic:${label}`,
+            diagnosticCategory:
+              typeof payload.diagnosticCategory === "string"
+                ? payload.diagnosticCategory
+                : null,
+          },
+          payload,
+        ),
       });
     },
     [onDebug],

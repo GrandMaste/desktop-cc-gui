@@ -134,6 +134,20 @@ export function isInvalidReviewThreadIdError(message: string): boolean {
   );
 }
 
+export function isRecoverableCodexThreadBindingError(message: string): boolean {
+  const normalized = message.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  return (
+    isInvalidReviewThreadIdError(message)
+    || normalized.includes("thread not found")
+    || normalized.includes("[session_not_found]")
+    || normalized.includes("session not found")
+    || normalized.includes("session file not found")
+  );
+}
+
 export function mapNetworkErrorToUserMessage(
   rawMessage: string,
   t: TFunction,

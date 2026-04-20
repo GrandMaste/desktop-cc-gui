@@ -166,6 +166,7 @@ type LayoutNodesOptions = {
   threadStatusById: Record<string, ThreadActivityStatus>;
   runningSessionCountByWorkspaceId: Record<string, number>;
   recentCompletedSessionCountByWorkspaceId: Record<string, number>;
+  hydratedThreadListWorkspaceIds: ReadonlySet<string>;
   threadListLoadingByWorkspace: Record<string, boolean>;
   threadListPagingByWorkspace: Record<string, boolean>;
   threadListCursorByWorkspace: Record<string, string | null>;
@@ -227,6 +228,7 @@ type LayoutNodesOptions = {
   onSelectWorkspace: (workspaceId: string) => void;
   onConnectWorkspace: (workspace: WorkspaceInfo) => Promise<void>;
   onAddAgent: (workspace: WorkspaceInfo, engine?: EngineType) => Promise<void>;
+  engineOptions?: EngineDisplayInfo[];
   onAddSharedAgent: (workspace: WorkspaceInfo) => Promise<void>;
   onAddWorktreeAgent: (workspace: WorkspaceInfo) => Promise<void>;
   onAddCloneAgent: (workspace: WorkspaceInfo) => Promise<void>;
@@ -251,6 +253,7 @@ type LayoutNodesOptions = {
   onDeleteWorktree: (workspaceId: string) => void;
   onLoadOlderThreads: (workspaceId: string) => void;
   onReloadWorkspaceThreads: (workspaceId: string) => void;
+  onQuickReloadWorkspaceThreads?: (workspaceId: string) => void;
   workspaceDropTargetRef: RefObject<HTMLElement | null>;
   isWorkspaceDropActive: boolean;
   workspaceDropText: string;
@@ -354,6 +357,7 @@ type LayoutNodesOptions = {
   filePanelMode: "git" | "files" | "search" | "prompts" | "memory" | "activity" | "radar";
   onFilePanelModeChange: (mode: "git" | "files" | "search" | "prompts" | "memory" | "activity" | "radar") => void;
   fileTreeLoading: boolean;
+  fileTreeLoadError?: string | null;
   onRefreshFiles?: () => void;
   onOpenDetachedFileExplorer?: (initialFilePath?: string | null) => void;
   onToggleRuntimeConsole: () => void;
@@ -1075,6 +1079,7 @@ export function useLayoutNodes(options: LayoutNodesOptions): LayoutNodesResult {
       threadStatusById={options.threadStatusById}
       runningSessionCountByWorkspaceId={options.runningSessionCountByWorkspaceId}
       recentSessionCountByWorkspaceId={options.recentCompletedSessionCountByWorkspaceId}
+      hydratedThreadListWorkspaceIds={options.hydratedThreadListWorkspaceIds}
       threadListLoadingByWorkspace={options.threadListLoadingByWorkspace}
       threadListPagingByWorkspace={options.threadListPagingByWorkspace}
       threadListCursorByWorkspace={options.threadListCursorByWorkspace}
@@ -1096,6 +1101,7 @@ export function useLayoutNodes(options: LayoutNodesOptions): LayoutNodesResult {
       onSelectWorkspace={options.onSelectWorkspace}
       onConnectWorkspace={options.onConnectWorkspace}
       onAddAgent={options.onAddAgent}
+      engineOptions={options.engineOptions}
       onAddSharedAgent={options.onAddSharedAgent}
       onAddWorktreeAgent={options.onAddWorktreeAgent}
       onAddCloneAgent={options.onAddCloneAgent}
@@ -1120,6 +1126,7 @@ export function useLayoutNodes(options: LayoutNodesOptions): LayoutNodesResult {
       onDeleteWorktree={options.onDeleteWorktree}
       onLoadOlderThreads={options.onLoadOlderThreads}
       onReloadWorkspaceThreads={options.onReloadWorkspaceThreads}
+      onQuickReloadWorkspaceThreads={options.onQuickReloadWorkspaceThreads}
       workspaceDropTargetRef={options.workspaceDropTargetRef}
       isWorkspaceDropActive={options.isWorkspaceDropActive}
       workspaceDropText={options.workspaceDropText}
@@ -1176,6 +1183,7 @@ export function useLayoutNodes(options: LayoutNodesOptions): LayoutNodesResult {
       onOpenWorkspaceFile={options.onOpenFile}
       agentTaskScrollRequest={options.agentTaskScrollRequest}
       isThinking={isThreadThinking}
+      isContextCompacting={activeThreadStatus?.isContextCompacting ?? false}
       proxyEnabled={options.systemProxyEnabled}
       proxyUrl={options.systemProxyUrl}
       processingStartedAt={activeThreadStatus?.processingStartedAt ?? null}
@@ -1560,6 +1568,7 @@ export function useLayoutNodes(options: LayoutNodesOptions): LayoutNodesResult {
         files={options.files}
         directories={options.directories}
         isLoading={options.fileTreeLoading}
+        loadError={options.fileTreeLoadError}
         filePanelMode={options.filePanelMode}
         onFilePanelModeChange={options.onFilePanelModeChange}
         onInsertText={options.onInsertComposerText}

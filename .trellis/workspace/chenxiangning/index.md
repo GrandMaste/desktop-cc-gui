@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 39
+- **Total Sessions**: 64
 - **Last Active**: 2026-04-20
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~242 | Active |
+| `journal-2.md` | ~1714 | Active |
 | `journal-1.md` | ~1990 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,31 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 64 | 2026-04-20 | 侧栏降级刷新与 worktree 边界收口 | `9e91aeb8` | `feature/vvvv0.4.5` |
+| 63 | 2026-04-20 | 提交加载进度弹窗与引擎可用性状态透传 | `835c49c38d2fcd0799da6bb579983afaaaf1077a` | `feature/vvvv0.4.5` |
+| 62 | 2026-04-20 | review 修复会话创建与 OpenCode 菜单边界 | `049918e90ee7130799ef7a3d31519a667043cf17` | `feature/vvvv0.4.5` |
+| 61 | 2026-04-20 | 补充 v0.4.5 发布说明 | `58e62cbb616f5cd2ff61c4bd666ae3a8bc7fa732` | `feature/vvvv0.4.5` |
+| 60 | 2026-04-20 | 同步 OpenSpec 稳定性与 Claude compact 进度 | `1924fb95488675e9b7e6fdf42def1ca1ce6e6549` | `feature/vvvv0.4.5` |
+| 59 | 2026-04-20 | 补强线程恢复诊断与会话降级承接 | `d37f2357a43f3959cef13aa7821a700932ad8020` | `feature/vvvv0.4.5` |
+| 58 | 2026-04-20 | 加固 OpenCode 子进程终止与超时收敛 | `69ad0190d835f85645e03f90ede6b59314885160` | `feature/vvvv0.4.5` |
+| 57 | 2026-04-20 | 加固 runtime 恢复与 Claude 手动压缩边界处理 | `a94b46f984e0543572c65d5b3ae33ada9cadd7db` | `feature/vvvv0.4.5` |
+| 56 | 2026-04-20 | 修复工作区切换文件树稳定性 | `e5cab7e2` | `feature/vvvv0.4.5` |
+| 55 | 2026-04-20 | 补强 Codex 会话自恢复与零活动超时兜底 | `c0c475f6af600f5af91482bc2094f839999123a1` | `feature/vvvv0.4.5` |
+| 54 | 2026-04-20 | 修复会话恢复与空态展示边界问题 | `78bf435a` | `feature/vvvv0.4.5` |
+| 53 | 2026-04-20 | Claude /compact 提案定稿 | `e0386b2f` | `feature/vvvv0.4.5` |
+| 52 | 2026-04-20 | 对齐工作区会话投影与侧边栏补水 | `15130eb1` | `feature/vvvv0.4.5` |
+| 51 | 2026-04-20 | OpenSpec runtime stability proposal | `a4148478` | `feature/vvvv0.4.5` |
+| 50 | 2026-04-20 | Clarify session management scope hints and preserve commit threads | `1c974f34` | `feature/vvvv0.4.5` |
+| 49 | 2026-04-20 | Hide recent conversations from landing views | `406e26eb` | `feature/vvvv0.4.5` |
+| 48 | 2026-04-20 | 修复会话管理边界校验与列表刷新 | `5cd53303` | `feature/vvvv0.4.5` |
+| 47 | 2026-04-20 | 补充顶部项目切换文件面板回归测试 | `3239d18d` | `feature/vvvv0.4.5` |
+| 46 | 2026-04-20 | 补充左侧项目显式主区切换入口 | `23f9ec09` | `feature/vvvv0.4.5` |
+| 45 | 2026-04-20 | 更新 v0.4.4 与 v0.4.5 Changelog | `cd1acabb2cfd56475039562b7ae005f9a5f1874e` | `feature/vvvv0.4.5` |
+| 44 | 2026-04-20 | 设置页实验区入口与续写融合命名收敛 | `0d5bc5a7` | `feature/vv0.4.4` |
+| 43 | 2026-04-20 | 修复会话管理边界处理并补齐全量回归夹具 | `6292c5ba574a030b35acc2ae214d82a1994b8af4` | `feature/vv0.4.4` |
+| 42 | 2026-04-20 | Codex 配置边界收口与设置页跨平台修复 | `924bb0a6` | `feature/vv0.4.4` |
+| 41 | 2026-04-20 | 全局会话归档中心与 Codex 配置边界治理落地 | `f9ce0073` | `feature/vv0.4.4` |
+| 40 | 2026-04-20 | 修正工作树新建会话入口交互 | `05afc70020bfd35be708a8f92d14f44d972b7e3e` | `feature/vv0.4.4` |
 | 39 | 2026-04-20 | 修复 OpenApp 图标懒加载回归并收口启动期开销 | `4d417500` | `feature/vv0.4.4` |
 | 38 | 2026-04-20 | 归档项目会话管理范围修正提案 | `869e2562668d722ed4f4cbc4fe7d97fc4ae79c3b` | `feature/vv0.4.4` |
 | 37 | 2026-04-20 | 落地项目范围会话聚合与归属路由 | `accf1da0` | `feature/vv0.4.4` |

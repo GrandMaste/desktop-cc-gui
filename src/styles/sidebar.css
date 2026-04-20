@@ -1109,6 +1109,10 @@
   letter-spacing: 0.02em;
 }
 
+.sidebar-refresh-icon.is-spinning {
+  animation: sidebar-thread-engine-spin 0.9s linear infinite;
+}
+
 .workspace-folder-btn:hover,
 .workspace-folder-btn[aria-expanded="true"] {
   color: var(--text-strong);
@@ -1214,6 +1218,12 @@
   transition: background-color 0.16s ease, color 0.16s ease;
 }
 
+.sidebar-workspace-menu-item-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .sidebar-workspace-menu-item:hover,
 .sidebar-workspace-menu-item:focus-visible {
   background: var(--surface-hover);
@@ -1289,6 +1299,45 @@
   color: var(--text-faint, var(--text-muted));
   margin-left: 1px;
   font-weight: 520;
+}
+
+.sidebar-workspace-menu-item-refresh {
+  width: 26px;
+  height: 26px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: background-color 0.16s ease, color 0.16s ease, opacity 0.16s ease;
+}
+
+.sidebar-workspace-menu-item-refresh:hover,
+.sidebar-workspace-menu-item-refresh:focus-visible {
+  background: var(--surface-hover);
+  color: var(--text-strong);
+}
+
+.sidebar-workspace-menu-item-refresh:disabled {
+  opacity: 0.7;
+  cursor: wait;
+}
+
+.sidebar-workspace-menu-item-refresh.is-refreshing svg {
+  animation: sidebar-workspace-menu-spin 0.85s linear infinite;
+}
+
+@keyframes sidebar-workspace-menu-spin {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 /* Market Rail */
@@ -1760,6 +1809,26 @@
   justify-content: center;
 }
 
+.worktree-create-session-button {
+  width: 17px;
+  height: 17px;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--border-subtle) 74%, transparent);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--surface-control) 54%, transparent);
+  color: var(--text-faint);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.worktree-create-session-button:hover {
+  color: var(--text-strong);
+  background: color-mix(in srgb, var(--surface-control) 88%, transparent);
+  border-color: color-mix(in srgb, var(--accent-primary) 46%, var(--border-subtle) 54%);
+}
+
 .worktree-toggle {
   width: 17px;
   height: 17px;
@@ -1910,46 +1979,15 @@
   margin-left: 0;
 }
 
-.thread-loading {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 6px 6px 4px;
+.thread-empty-state {
+  padding: 6px 10px 4px;
+  color: var(--text-faint, var(--text-muted));
+  font-size: 12px;
+  line-height: 1.4;
 }
 
-.thread-loading-nested {
+.thread-empty-state-nested {
   margin-left: 4px;
-}
-
-.thread-skeleton {
-  height: 8px;
-  width: 62%;
-  border-radius: 999px;
-  background: linear-gradient(
-    110deg,
-    color-mix(in srgb, var(--border-subtle) 70%, transparent) 8%,
-    color-mix(in srgb, var(--text-faint) 34%, transparent) 20%,
-    color-mix(in srgb, var(--border-subtle) 70%, transparent) 33%
-  );
-  background-size: 200% 100%;
-  animation: sidebar-thread-skeleton-shimmer 1.4s ease-in-out infinite;
-}
-
-.thread-skeleton-wide {
-  width: 78%;
-}
-
-.thread-skeleton-short {
-  width: 44%;
-}
-
-@keyframes sidebar-thread-skeleton-shimmer {
-  0% {
-    background-position: 120% 0;
-  }
-  100% {
-    background-position: -80% 0;
-  }
 }
 
 /* Updated Thread Row Styles */
@@ -2561,4 +2599,27 @@
   :root[data-theme="light"] .thread-delete-popover-button-secondary {
     background: rgba(255, 255, 255, 0.9);
   }
+}
+
+/* Sidebar pointer policy: keep the left rail on the normal arrow cursor. */
+.sidebar-search-clear,
+.subtitle-button,
+.sidebar-quick-icon-button,
+.sidebar-primary-nav-mode-item,
+.workspace-group-header.is-toggleable,
+.workspace-row,
+.workspace-tree-toggle,
+.workspace-folder-btn,
+.workspace-action-btn,
+.worktree-header,
+.worktree-row,
+.worktree-create-session-button,
+.worktree-toggle,
+.worktree-row .connect,
+.thread-row,
+.thread-pin-toggle,
+.thread-more,
+.sidebar-settings-button,
+.sidebar-terminal-button {
+  cursor: default !important;
 }

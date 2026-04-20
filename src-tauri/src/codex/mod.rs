@@ -21,7 +21,9 @@ pub(crate) mod thread_mode_state;
 
 use self::args::resolve_workspace_codex_args;
 pub(crate) use self::home::resolve_workspace_codex_home;
-use self::mcp_config::{list_global_mcp_servers as list_global_mcp_servers_impl, GlobalMcpServerEntry};
+use self::mcp_config::{
+    list_global_mcp_servers as list_global_mcp_servers_impl, GlobalMcpServerEntry,
+};
 use self::thread_listing::{build_unified_codex_thread_page, resolve_workspace_fallback_model};
 pub(crate) use crate::backend::app_server::WorkspaceSession;
 use crate::backend::app_server::{
@@ -29,6 +31,7 @@ use crate::backend::app_server::{
     resolve_codex_launch_context, spawn_workspace_session as spawn_workspace_session_inner,
 };
 use crate::backend::events::AppServerEvent;
+use crate::engine::SendMessageParams;
 use crate::event_sink::TauriEventSink;
 use crate::local_usage;
 use crate::remote_backend;
@@ -40,10 +43,130 @@ use crate::types::WorkspaceEntry;
 pub(crate) use self::session_runtime::ensure_codex_session;
 
 const DELETE_ARCHIVE_TIMEOUT_MS: u64 = 2_000;
+const CLAUDE_MANUAL_COMPACT_TIMEOUT_SECS: u64 = 120;
+
 fn normalize_model_id(candidate: Option<String>) -> Option<String> {
     candidate
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
+}
+
+fn emit_manual_compaction_event(
+    app: &AppHandle,
+    workspace_id: String,
+    method: &str,
+    params: Value,
+) {
+    let _ = app.emit(
+        "app-server-event",
+        AppServerEvent {
+            workspace_id,
+            message: json!({
+                "method": method,
+                "params": params,
+            }),
+        },
+    );
+}
+
+async fn compact_claude_thread(
+    workspace_id: String,
+    thread_id: String,
+    state: &AppState,
+    app: &AppHandle,
+) -> Result<Value, String> {
+    let session_id = thread_id
+        .strip_prefix("claude:")
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| format!("Claude thread id is invalid: {thread_id}"))?
+        .to_string();
+
+    let workspace_entry = {
+        let workspaces = state.workspaces.lock().await;
+        workspaces
+            .get(&workspace_id)
+            .cloned()
+            .ok_or_else(|| "Workspace not found".to_string())?
+    };
+    let workspace_path = PathBuf::from(&workspace_entry.path);
+    let session = state
+        .engine_manager
+        .get_claude_session(&workspace_id, &workspace_path)
+        .await;
+
+    emit_manual_compaction_event(
+        app,
+        workspace_id.clone(),
+        "thread/compacting",
+        json!({
+            "threadId": &thread_id,
+            "thread_id": &thread_id,
+            "auto": false,
+            "manual": true,
+        }),
+    );
+
+    let turn_id = format!("claude-compact-{}", uuid::Uuid::new_v4());
+    let params = SendMessageParams {
+        text: "/compact".to_string(),
+        images: None,
+        continue_session: true,
+        session_id: Some(session_id),
+        ..Default::default()
+    };
+
+    let compact_result = timeout(
+        Duration::from_secs(CLAUDE_MANUAL_COMPACT_TIMEOUT_SECS),
+        session.send_message(params, &turn_id),
+    )
+    .await
+    .map_err(|_| {
+        format!(
+            "Claude /compact timed out after {} seconds",
+            CLAUDE_MANUAL_COMPACT_TIMEOUT_SECS
+        )
+    })?;
+
+    match compact_result {
+        Ok(result_text) => {
+            emit_manual_compaction_event(
+                app,
+                workspace_id,
+                "thread/compacted",
+                json!({
+                    "threadId": &thread_id,
+                    "thread_id": &thread_id,
+                    "turnId": &turn_id,
+                    "turn_id": &turn_id,
+                    "auto": false,
+                    "manual": true,
+                }),
+            );
+            Ok(json!({
+                "threadId": &thread_id,
+                "turnId": &turn_id,
+                "text": result_text,
+                "status": "completed",
+                "engine": "claude",
+            }))
+        }
+        Err(error) => {
+            emit_manual_compaction_event(
+                app,
+                workspace_id,
+                "thread/compactionFailed",
+                json!({
+                    "threadId": &thread_id,
+                    "thread_id": &thread_id,
+                    "auto": false,
+                    "manual": true,
+                    "reason": error,
+                }),
+            );
+            Err(error)
+        }
+    }
 }
 
 fn pick_model_from_model_list_response(response: &Value) -> Option<String> {
@@ -813,6 +936,10 @@ pub(crate) async fn thread_compact(
             json!({ "workspaceId": workspace_id, "threadId": normalized_thread_id }),
         )
         .await;
+    }
+
+    if normalized_thread_id.starts_with("claude:") {
+        return compact_claude_thread(workspace_id, normalized_thread_id, &state, &app).await;
     }
 
     ensure_codex_session(&workspace_id, &state, &app).await?;
@@ -1959,13 +2086,11 @@ fn sanitize_run_worktree_name(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        normalize_model_id, pick_model_from_model_list_response,
-    };
     use super::thread_listing::{
         build_local_codex_session_preview, build_thread_list_empty_response,
         codex_session_identifier_candidates, merge_unified_codex_thread_entries,
     };
+    use super::{normalize_model_id, pick_model_from_model_list_response};
     use crate::types::{LocalUsageSessionSummary, LocalUsageUsageData};
     use serde_json::json;
     use std::collections::HashSet;
@@ -2056,6 +2181,7 @@ mod tests {
                 session_id: "thread-dup".to_string(),
                 session_id_aliases: Vec::new(),
                 timestamp: 110,
+                cwd: None,
                 model: "openai/gpt-5".to_string(),
                 usage: LocalUsageUsageData::default(),
                 cost: 0.0,
@@ -2069,6 +2195,7 @@ mod tests {
                 session_id: "thread-local".to_string(),
                 session_id_aliases: Vec::new(),
                 timestamp: 105,
+                cwd: None,
                 model: "openai/gpt-5-mini".to_string(),
                 usage: LocalUsageUsageData::default(),
                 cost: 0.0,
@@ -2123,6 +2250,7 @@ mod tests {
             session_id: "thread-dup".to_string(),
             session_id_aliases: Vec::new(),
             timestamp: 110,
+            cwd: None,
             model: "openai/gpt-5".to_string(),
             usage: LocalUsageUsageData::default(),
             cost: 0.0,
@@ -2162,6 +2290,7 @@ mod tests {
             session_id: "session-123".to_string(),
             session_id_aliases: vec!["rollout-2026-04-10T10-00-00-session-123".to_string()],
             timestamp: 110,
+            cwd: None,
             model: "openai/gpt-5".to_string(),
             usage: LocalUsageUsageData::default(),
             cost: 0.0,
@@ -2249,6 +2378,7 @@ mod tests {
             session_id: "session-123".to_string(),
             session_id_aliases: vec!["rollout-2026-04-10T10-00-00-session-123".to_string()],
             timestamp: 110,
+            cwd: None,
             model: "openai/gpt-5".to_string(),
             usage: LocalUsageUsageData::default(),
             cost: 0.0,

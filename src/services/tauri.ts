@@ -37,8 +37,8 @@ import type {
   ReviewTarget,
 } from "../types";
 import type { ClaudeCurrentConfig as VendorClaudeCurrentConfig, CodexProviderConfig as VendorCodexProviderConfig, ProviderConfig as VendorProviderConfig } from "../features/vendors/types";
-export type { WorkspaceSessionCatalogEntry, WorkspaceSessionCatalogQuery, WorkspaceSessionCatalogPage, WorkspaceSessionBatchMutationResult, WorkspaceSessionBatchMutationResponse } from "./tauri/sessionManagement";
-export { archiveWorkspaceSessions, deleteWorkspaceSessions, listWorkspaceSessions, unarchiveWorkspaceSessions } from "./tauri/sessionManagement";
+export type { WorkspaceSessionCatalogEntry, WorkspaceSessionCatalogQuery, WorkspaceSessionCatalogPage, WorkspaceSessionProjectionSummary, WorkspaceSessionBatchMutationResult, WorkspaceSessionBatchMutationResponse } from "./tauri/sessionManagement";
+export { archiveWorkspaceSessions, deleteWorkspaceSessions, getWorkspaceSessionProjectionSummary, listGlobalCodexSessions, listProjectRelatedCodexSessions, listWorkspaceSessions, unarchiveWorkspaceSessions } from "./tauri/sessionManagement";
 
 function isMissingTauriInvokeError(error: unknown) {
   return (
@@ -48,8 +48,7 @@ function isMissingTauriInvokeError(error: unknown) {
   );
 }
 
-const WEB_SERVICE_CLI_ENGINE_MESSAGE =
-  "Web 服务当前仅支持 Codex CLI。请切换到 Codex CLI（Web service currently supports Codex CLI only）.";
+const WEB_SERVICE_CLI_ENGINE_MESSAGE = "Web 服务当前仅支持 Codex CLI。请切换到 Codex CLI（Web service currently supports Codex CLI only）.";
 let daemonEngineRpcSupported: boolean | null = null;
 
 function normalizeInvokeErrorMessage(error: unknown): string {

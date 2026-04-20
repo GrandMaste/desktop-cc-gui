@@ -3,6 +3,8 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   archiveWorkspaceSessions,
+  listGlobalCodexSessions,
+  listProjectRelatedCodexSessions,
   listWorkspaceSessions,
 } from "../../../../../services/tauri";
 import {
@@ -12,6 +14,8 @@ import {
 } from "./useWorkspaceSessionCatalog";
 
 vi.mock("../../../../../services/tauri", () => ({
+  listGlobalCodexSessions: vi.fn(),
+  listProjectRelatedCodexSessions: vi.fn(),
   listWorkspaceSessions: vi.fn(),
   archiveWorkspaceSessions: vi.fn(),
   unarchiveWorkspaceSessions: vi.fn(),
@@ -27,6 +31,16 @@ const DEFAULT_FILTERS: WorkspaceSessionCatalogFilters = {
 describe("useWorkspaceSessionCatalog", () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    vi.mocked(listGlobalCodexSessions).mockResolvedValue({
+      data: [],
+      nextCursor: null,
+      partialSource: null,
+    });
+    vi.mocked(listProjectRelatedCodexSessions).mockResolvedValue({
+      data: [],
+      nextCursor: null,
+      partialSource: null,
+    });
   });
 
   it("builds selection key with workspace ownership", () => {
@@ -64,6 +78,7 @@ describe("useWorkspaceSessionCatalog", () => {
     const { result, rerender } = renderHook(
       ({ workspaceId }) =>
         useWorkspaceSessionCatalog({
+          mode: "project",
           workspaceId,
           filters: DEFAULT_FILTERS,
         }),
@@ -139,6 +154,7 @@ describe("useWorkspaceSessionCatalog", () => {
 
     const { result } = renderHook(() =>
       useWorkspaceSessionCatalog({
+        mode: "project",
         workspaceId: "ws-main",
         filters: DEFAULT_FILTERS,
       }),
@@ -212,6 +228,7 @@ describe("useWorkspaceSessionCatalog", () => {
 
     const { result } = renderHook(() =>
       useWorkspaceSessionCatalog({
+        mode: "project",
         workspaceId: "ws-main",
         filters: DEFAULT_FILTERS,
       }),
@@ -258,5 +275,121 @@ describe("useWorkspaceSessionCatalog", () => {
         threadKind: "native",
       },
     ]);
+  });
+
+  it("loads global codex sessions without requiring a workspace", async () => {
+    vi.mocked(listGlobalCodexSessions).mockResolvedValueOnce({
+      data: [
+        {
+          sessionId: "global:1",
+          workspaceId: "__global_unassigned__",
+          engine: "codex",
+          title: "Global session",
+          updatedAt: 12,
+          threadKind: "native",
+        },
+      ],
+      nextCursor: null,
+      partialSource: null,
+    });
+
+    const { result } = renderHook(() =>
+      useWorkspaceSessionCatalog({
+        mode: "global",
+        workspaceId: null,
+        filters: DEFAULT_FILTERS,
+      }),
+    );
+
+    await waitFor(() => {
+      expect(listGlobalCodexSessions).toHaveBeenCalledWith({
+        query: { keyword: null, engine: "codex", status: "active" },
+        cursor: null,
+        limit: 100,
+      });
+    });
+
+    await waitFor(() => {
+      expect(result.current.entries).toHaveLength(1);
+    });
+  });
+
+  it("blocks mutations for owner-unresolved global entries", async () => {
+    const { result } = renderHook(() =>
+      useWorkspaceSessionCatalog({
+        mode: "global",
+        workspaceId: null,
+        filters: DEFAULT_FILTERS,
+      }),
+    );
+
+    let response: Awaited<ReturnType<typeof result.current.mutate>> | undefined;
+    await act(async () => {
+      response = await result.current.mutate("archive", [
+        {
+          sessionId: "global:1",
+          workspaceId: "__global_unassigned__",
+          engine: "codex",
+          title: "Unassigned",
+          updatedAt: 1,
+          threadKind: "native",
+        },
+      ]);
+    });
+
+    expect(response?.results).toEqual([
+      {
+        selectionKey: "__global_unassigned__::global:1",
+        sessionId: "global:1",
+        workspaceId: "__global_unassigned__",
+        ok: false,
+        archivedAt: null,
+        error: "Owner workspace could not be resolved for this session.",
+        code: "OWNER_WORKSPACE_UNRESOLVED",
+      },
+    ]);
+    expect(archiveWorkspaceSessions).not.toHaveBeenCalled();
+  });
+
+  it("loads inferred related codex sessions for project mode", async () => {
+    vi.mocked(listProjectRelatedCodexSessions).mockResolvedValueOnce({
+      data: [
+        {
+          sessionId: "global:related",
+          workspaceId: "ws-owner",
+          matchedWorkspaceId: "ws-main",
+          attributionStatus: "inferred-related",
+          attributionReason: "shared-git-root",
+          attributionConfidence: "medium",
+          engine: "codex",
+          title: "Related session",
+          updatedAt: 99,
+          threadKind: "native",
+        },
+      ],
+      nextCursor: null,
+      partialSource: null,
+    });
+
+    const { result } = renderHook(() =>
+      useWorkspaceSessionCatalog({
+        mode: "project",
+        workspaceId: "ws-main",
+        filters: DEFAULT_FILTERS,
+        source: "related",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(listProjectRelatedCodexSessions).toHaveBeenCalledWith("ws-main", {
+        query: { keyword: null, engine: "codex", status: "active" },
+        cursor: null,
+        limit: 100,
+      });
+    });
+
+    await waitFor(() => {
+      expect(result.current.entries).toHaveLength(1);
+    });
   });
 });

@@ -21,15 +21,23 @@ pub(crate) async fn delete_codex_session_for_workspace(
     workspace_id: &str,
     session_id: &str,
 ) -> Result<usize, String> {
+    let normalized_session_id = session_id.trim();
     let results =
         delete_codex_sessions_for_workspace(workspaces, workspace_id, &[session_id.to_string()])
             .await?;
-    let deleted_count = results
+    let result = results
         .iter()
-        .find(|result| result.session_id == session_id.trim())
-        .map(|result| result.deleted_count)
-        .unwrap_or(0);
-    Ok(deleted_count)
+        .find(|result| result.session_id == normalized_session_id)
+        .ok_or_else(|| {
+            format!(
+                "codex session delete result missing for session {}",
+                normalized_session_id
+            )
+        })?;
+    if let Some(error) = &result.error {
+        return Err(error.clone());
+    }
+    Ok(result.deleted_count)
 }
 
 pub(crate) async fn delete_codex_sessions_for_workspace(
@@ -52,7 +60,7 @@ pub(crate) async fn delete_codex_sessions_for_workspace(
         if normalized.is_empty() {
             return Err("session_id is required".to_string());
         }
-        if normalized.contains('/') || normalized.contains('\\') || normalized.contains("..") {
+        if is_invalid_session_path_segment(normalized) {
             return Err("invalid session_id".to_string());
         }
         if seen_session_ids.insert(normalized.to_string()) {
@@ -276,7 +284,11 @@ fn delete_codex_session_files_batch(
         results.push(CodexSessionDeleteBatchResult {
             session_id: normalized_session_id.to_string(),
             deleted: delete_error.is_none() && deleted_count > 0,
-            deleted_count: if delete_error.is_none() { deleted_count } else { 0 },
+            deleted_count: if delete_error.is_none() {
+                deleted_count
+            } else {
+                0
+            },
             error: delete_error,
         });
     }

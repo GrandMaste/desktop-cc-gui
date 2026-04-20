@@ -30,6 +30,7 @@ export function renderAppShell(ctx: any) {
     cancelClonePrompt, cancelWorktreePrompt, cancelled, centerMode, checkoutBranch, chooseCloneCopiesFolder, choosePreset, claudeAccessModeRef,
     clearActiveImages, clearCloneCopiesFolder, clearDebugEntries, clearDictationError, clearDictationHint, clearDictationTranscript, clearDraftForThread, clearGitRootCandidates,
     clonePrompt, closePlanPanel, closeReleaseNotes, closeReviewPrompt, closeSearchPalette, closeSettings, closeTerminalPanel, closeWorktreeCreateResult,
+    dismissLoadingProgressDialog,
     codexComposerModeRef, collaborationModePayload, collaborationModes, collaborationModesEnabled, collaborationRuntimeModeByThread, collaborationUiModeByThread, collapseRightPanel, collapseSidebar,
     commands, commitError, commitLoading, commitMessage, commitMessageError, commitMessageLoading, compactEmptyCodexNode, compactEmptyGitNode,
     compactEmptySpecNode, compactGitBackNode, completionTrackerBySessionRef, completionTrackerReadyRef, composerEditorSettings, composerInputRef, composerInsert, composerKanbanContextMode,
@@ -73,6 +74,7 @@ export function renderAppShell(ctx: any) {
     kanbanReorderTask, kanbanTasks, kanbanUpdatePanel, kanbanUpdateTask, kanbanViewState, key, label, lastAgent,
     lastAgentMessageByThread, lastAgentTimestamp, lastCodexModeSyncThreadRef, lastDurationMs, lastFrameAt, latestAgentRuns, latestClampedHeight, latestRawHeight,
     latestSnippet, launchScriptState, launchScriptsState, listThreadsForWorkspace, listThreadsForWorkspaceTracked, liveEditPreviewEnabled, loadOlderThreadsForWorkspace, lockLiveSessions,
+    loadingProgressDialog,
     main, mainHeaderNode, mainWidth, mappedMode, markWorkspaceConnected, maxHeight, messagesNode, minHeight,
     models, monitor, movePrompt, moveWorkspaceGroup, navigateToThread, next, nextDefault, nextDraft,
     nextFiles, nextHeight, nextScope, nextSettings, normalizePath, normalized, onCloseTerminal, onDebugPanelResizeStart,
@@ -466,6 +468,8 @@ export function renderAppShell(ctx: any) {
         onRetry={retryReleaseNotesLoad}
       />
       <AppModals
+        loadingProgressDialog={loadingProgressDialog}
+        onLoadingProgressDialogClose={dismissLoadingProgressDialog}
         renamePrompt={renamePrompt}
         onRenamePromptChange={handleRenamePromptChange}
         onRenamePromptCancel={handleRenamePromptCancel}

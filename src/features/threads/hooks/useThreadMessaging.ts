@@ -17,6 +17,7 @@ import {
   startReview as startReviewService,
   interruptTurn as interruptTurnService,
   engineInterruptTurn as engineInterruptTurnService,
+  compactThreadContext as compactThreadContextService,
   listMcpServerStatus as listMcpServerStatusService,
   engineSendMessage as engineSendMessageService,
   engineInterrupt as engineInterruptService,
@@ -75,6 +76,7 @@ import {
   extractSessionIdFromEngineSendResponse,
   isInvalidReviewThreadIdError,
   isLikelyForeignModelForGemini,
+  isRecoverableCodexThreadBindingError,
   isUnknownEngineInterruptTurnMethodError,
   isValidClaudeModelForPassthrough,
   mapNetworkErrorToUserMessage,
@@ -83,6 +85,7 @@ import {
   resolveCollaborationModeIdFromPayload,
   resolveRecoverableCodexFirstPacketTimeout,
 } from "./threadMessagingHelpers";
+import { resolveThreadStabilityDiagnostic } from "../utils/stabilityDiagnostics";
 
 type SendMessageOptions = {
   skipPromptExpansion?: boolean;
@@ -726,9 +729,70 @@ export function useThreadMessaging({
           hasImages: images.length > 0,
         });
       }
+      const retryCodexSendAfterThreadRefresh = async (errorMessage: string) => {
+        if (
+          resolvedEngine !== "codex" ||
+          options?.codexInvalidThreadRetryAttempted ||
+          !isRecoverableCodexThreadBindingError(errorMessage)
+        ) {
+          return false;
+        }
+        const reboundThreadId = await refreshThread(workspace.id, threadId);
+        if (!reboundThreadId) {
+          return false;
+        }
+        onDebug?.({
+          id: `${Date.now()}-client-turn-start-thread-retry`,
+          timestamp: Date.now(),
+          source: "client",
+          label: "turn/start thread rebind retry",
+          payload: {
+            workspaceId: workspace.id,
+            originalThreadId: threadId,
+            reboundThreadId,
+            reboundChanged: reboundThreadId !== threadId,
+            reason: errorMessage,
+          },
+        });
+        if (reboundThreadId !== threadId) {
+          dispatch({
+            type: "setActiveThreadId",
+            workspaceId: workspace.id,
+            threadId: reboundThreadId,
+          });
+          if (optimisticUserItem) {
+            dispatch({
+              type: "setThreadItems",
+              threadId,
+              items: (itemsByThread[threadId] ?? []).filter(
+                (item) => item.id !== optimisticUserItem?.id,
+              ),
+            });
+            dispatch({
+              type: "upsertItem",
+              workspaceId: workspace.id,
+              threadId: reboundThreadId,
+              item: optimisticUserItem,
+              hasCustomName: Boolean(getCustomName(workspace.id, reboundThreadId)),
+            });
+          }
+        }
+        markProcessing(threadId, false);
+        setActiveTurnId(threadId, null);
+        safeMessageActivity();
+        await sendMessageToThread(workspace, reboundThreadId, finalText, images, {
+          skipPromptExpansion: true,
+          skipOptimisticUserBubble: true,
+          model: modelForSend,
+          effort: resolvedEffort,
+          collaborationMode: sanitizedCollaborationMode,
+          accessMode: resolvedAccessMode,
+          codexInvalidThreadRetryAttempted: true,
+        });
+        return true;
+      };
       try {
         let response: Record<string, unknown>;
-
         if (threadKind === "shared") {
           const sharedResolvedEngine = normalizeSharedSessionEngine(resolvedEngine);
           dispatch({
@@ -941,26 +1005,43 @@ export function useThreadMessaging({
             payload: response,
           });
 
-          const rpcError = extractRpcErrorMessage(response);
-          if (rpcError) {
-            const normalized = mapNetworkErrorToUserMessage(rpcError, t);
-            const claudeMcpHint =
-              resolvedEngine === "claude" &&
-              !normalized.isNetwork &&
+        const rpcError = extractRpcErrorMessage(response);
+        if (rpcError) {
+          const stabilityDiagnostic = resolveThreadStabilityDiagnostic(rpcError);
+          const normalized = mapNetworkErrorToUserMessage(rpcError, t);
+          const claudeMcpHint =
+            resolvedEngine === "claude" &&
+            !normalized.isNetwork &&
               claudeMcpDiagnostics.length > 0
                 ? `\n\n${claudeMcpDiagnostics.join("\n")}`
                 : "";
             markProcessing(threadId, false);
             setActiveTurnId(threadId, null);
-            pushThreadErrorMessage(
-              threadId,
-              normalized.isNetwork
-                ? normalized.message
-                : `${t("threads.turnFailedWithMessage", { message: normalized.message })}${claudeMcpHint}`,
-            );
-            if (normalized.isNetwork) {
-              pushErrorToast({
-                title: t("common.error"),
+          pushThreadErrorMessage(
+            threadId,
+            normalized.isNetwork
+              ? normalized.message
+              : `${t("threads.turnFailedWithMessage", { message: normalized.message })}${claudeMcpHint}`,
+          );
+          if (stabilityDiagnostic) {
+            onDebug?.({
+              id: `${Date.now()}-client-turn-start-stability-diagnostic`,
+              timestamp: Date.now(),
+              source: "client",
+              label: "turn/start stability diagnostic",
+              payload: {
+                workspaceId: workspace.id,
+                threadId,
+                category: stabilityDiagnostic.category,
+                rawMessage: stabilityDiagnostic.rawMessage,
+                recoveryReason: stabilityDiagnostic.reconnectReason ?? null,
+                stage: "rpc-error",
+              },
+            });
+          }
+          if (normalized.isNetwork) {
+            pushErrorToast({
+              title: t("common.error"),
                 message: normalized.message,
                 durationMs: 4800,
               });
@@ -1071,64 +1152,10 @@ export function useThreadMessaging({
         });
         const rpcError = extractRpcErrorMessage(response);
         if (rpcError) {
-          if (
-            resolvedEngine === "codex" &&
-            !options?.codexInvalidThreadRetryAttempted &&
-            isInvalidReviewThreadIdError(rpcError)
-          ) {
-            const reboundThreadId = await refreshThread(workspace.id, threadId);
-            if (reboundThreadId) {
-              onDebug?.({
-                id: `${Date.now()}-client-turn-start-thread-retry`,
-                timestamp: Date.now(),
-                source: "client",
-                label: "turn/start thread rebind retry",
-                payload: {
-                  workspaceId: workspace.id,
-                  originalThreadId: threadId,
-                  reboundThreadId,
-                  reboundChanged: reboundThreadId !== threadId,
-                  reason: rpcError,
-                },
-              });
-              if (reboundThreadId !== threadId) {
-                dispatch({
-                  type: "setActiveThreadId",
-                  workspaceId: workspace.id,
-                  threadId: reboundThreadId,
-                });
-                if (optimisticUserItem) {
-                  dispatch({
-                    type: "setThreadItems",
-                    threadId,
-                    items: (itemsByThread[threadId] ?? []).filter(
-                      (item) => item.id !== optimisticUserItem?.id,
-                    ),
-                  });
-                  dispatch({
-                    type: "upsertItem",
-                    workspaceId: workspace.id,
-                    threadId: reboundThreadId,
-                    item: optimisticUserItem,
-                    hasCustomName: Boolean(getCustomName(workspace.id, reboundThreadId)),
-                  });
-                }
-              }
-              markProcessing(threadId, false);
-              setActiveTurnId(threadId, null);
-              safeMessageActivity();
-              await sendMessageToThread(workspace, reboundThreadId, finalText, images, {
-                skipPromptExpansion: true,
-                skipOptimisticUserBubble: true,
-                model: modelForSend,
-                effort: resolvedEffort,
-                collaborationMode: sanitizedCollaborationMode,
-                accessMode: resolvedAccessMode,
-                codexInvalidThreadRetryAttempted: true,
-              });
-              return;
-            }
+          if (await retryCodexSendAfterThreadRefresh(rpcError)) {
+            return;
           }
+          const stabilityDiagnostic = resolveThreadStabilityDiagnostic(rpcError);
           const firstPacketTimeoutSeconds =
             resolveRecoverableCodexFirstPacketTimeout(resolvedEngine, rpcError);
           if (firstPacketTimeoutSeconds) {
@@ -1166,6 +1193,22 @@ export function useThreadMessaging({
               ? normalized.message
               : t("threads.turnFailedToStartWithMessage", { message: normalized.message }),
           );
+          if (stabilityDiagnostic) {
+            onDebug?.({
+              id: `${Date.now()}-client-turn-start-stability-diagnostic`,
+              timestamp: Date.now(),
+              source: "client",
+              label: "turn/start stability diagnostic",
+              payload: {
+                workspaceId: workspace.id,
+                threadId,
+                category: stabilityDiagnostic.category,
+                rawMessage: stabilityDiagnostic.rawMessage,
+                recoveryReason: stabilityDiagnostic.reconnectReason ?? null,
+                stage: "rpc-error",
+              },
+            });
+          }
           if (normalized.isNetwork) {
             pushErrorToast({
               title: t("common.error"),
@@ -1220,6 +1263,10 @@ export function useThreadMessaging({
         }
       } catch (error) {
         const rawMessage = error instanceof Error ? error.message : String(error);
+        if (await retryCodexSendAfterThreadRefresh(rawMessage)) {
+          return;
+        }
+        const stabilityDiagnostic = resolveThreadStabilityDiagnostic(rawMessage);
         const firstPacketTimeoutSeconds =
           resolveRecoverableCodexFirstPacketTimeout(resolvedEngine, rawMessage);
         if (firstPacketTimeoutSeconds) {
@@ -1256,7 +1303,11 @@ export function useThreadMessaging({
           timestamp: Date.now(),
           source: "error",
           label: "turn/start error",
-          payload: rawMessage,
+          payload: {
+            rawMessage,
+            category: stabilityDiagnostic?.category ?? null,
+            recoveryReason: stabilityDiagnostic?.reconnectReason ?? null,
+          },
         });
         pushThreadErrorMessage(threadId, normalized.message);
         if (normalized.isNetwork) {
@@ -1280,9 +1331,13 @@ export function useThreadMessaging({
       markProcessing,
       model,
       onDebug,
+      onInputMemoryCaptured,
       itemsByThread,
+      interruptedThreadsRef,
+      pendingInterruptsRef,
       pushThreadErrorMessage,
       recordThreadActivity,
+      resolveThreadKind,
       resolveThreadEngine,
       resolveOpenCodeAgent,
       resolveOpenCodeVariant,
@@ -1393,6 +1448,8 @@ export function useThreadMessaging({
       normalizeEngineSelection,
       onDebug,
       pushThreadErrorMessage,
+      getThreadEngine,
+      resolveThreadKind,
       resolveThreadEngine,
       safeMessageActivity,
       sendMessageToThread,
@@ -2067,6 +2124,110 @@ export function useThreadMessaging({
     ],
   );
 
+  const startCompact = useCallback(
+    async (_text: string) => {
+      if (!activeWorkspace) {
+        return;
+      }
+      const threadId = activeThreadId;
+      const unavailableMessage = t("threads.claudeManualCompactUnavailable");
+      const isConcreteClaudeThread = typeof threadId === "string" && threadId.startsWith("claude:");
+      if (!threadId) {
+        pushErrorToast({
+          title: t("common.warning"),
+          message: unavailableMessage,
+        });
+        return;
+      }
+
+      const threadEngine = resolveThreadEngine(activeWorkspace.id, threadId);
+      const threadIdCompatible = isThreadIdCompatibleWithEngine("claude", threadId);
+      if (
+        threadEngine !== "claude" ||
+        !threadIdCompatible ||
+        !isConcreteClaudeThread
+      ) {
+        onDebug?.({
+          id: `${Date.now()}-client-compact-thread-unavailable`,
+          timestamp: Date.now(),
+          source: "client",
+          label: "compact/thread unavailable",
+          payload: {
+            workspaceId: activeWorkspace.id,
+            threadId,
+            threadEngine,
+            threadIdCompatible,
+            isConcreteClaudeThread,
+          },
+        });
+        pushErrorToast({
+          title: t("common.warning"),
+          message: unavailableMessage,
+        });
+        return;
+      }
+
+      dispatch({
+        type: "markContextCompacting",
+        threadId,
+        isCompacting: true,
+        timestamp: Date.now(),
+      });
+      safeMessageActivity();
+
+      try {
+        const response = await compactThreadContextService(activeWorkspace.id, threadId);
+        const responseObject =
+          response && typeof response === "object"
+            ? (response as Record<string, unknown>)
+            : null;
+        const turnId = asString(
+          responseObject?.turnId ??
+            ((responseObject?.result as Record<string, unknown> | undefined)?.turnId ?? ""),
+        ).trim();
+        const completedAt = Date.now();
+        dispatch({
+          type: "markContextCompacting",
+          threadId,
+          isCompacting: false,
+          timestamp: completedAt,
+        });
+        dispatch({
+          type: "appendContextCompacted",
+          threadId,
+          turnId: turnId || `manual-${completedAt}`,
+        });
+        recordThreadActivity(activeWorkspace.id, threadId, completedAt);
+        safeMessageActivity();
+      } catch (error) {
+        dispatch({
+          type: "markContextCompacting",
+          threadId,
+          isCompacting: false,
+          timestamp: Date.now(),
+        });
+        const reason = extractRpcErrorMessage(error);
+        const message = reason
+          ? t("threads.contextCompactionFailedWithMessage", { message: reason })
+          : t("threads.contextCompactionFailed");
+        pushThreadErrorMessage(threadId, message);
+        safeMessageActivity();
+      }
+    },
+    [
+      activeThreadId,
+      activeWorkspace,
+      dispatch,
+      isThreadIdCompatibleWithEngine,
+      onDebug,
+      pushThreadErrorMessage,
+      recordThreadActivity,
+      resolveThreadEngine,
+      safeMessageActivity,
+      t,
+    ],
+  );
+
   const startSpecRoot = useCallback(
     async (text: string) => {
       if (!activeWorkspace) {
@@ -2724,6 +2885,7 @@ export function useThreadMessaging({
     startSpecRoot,
     startStatus,
     startContext,
+    startCompact,
     startFast,
     startMode,
     startExport,

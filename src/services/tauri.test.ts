@@ -47,6 +47,9 @@ import {
   detectEngines,
   engineSendMessage,
   exportRewindFiles,
+  getWorkspaceSessionProjectionSummary,
+  listGlobalCodexSessions,
+  listProjectRelatedCodexSessions,
   listExternalSpecTree,
   listWorkspaceSessions,
   archiveWorkspaceSessions,
@@ -199,6 +202,71 @@ describe("tauri invoke wrappers", () => {
       query: { keyword: "bugfix", engine: "codex", status: "archived" },
       cursor: "offset:0",
       limit: 20,
+    });
+  });
+
+  it("maps global codex session list options to list_global_codex_sessions", async () => {
+    const invokeMock = vi.mocked(invoke);
+    invokeMock.mockResolvedValueOnce({
+      data: [],
+      nextCursor: "offset:10",
+      partialSource: null,
+    });
+
+    await listGlobalCodexSessions({
+      query: { keyword: "archive", engine: "codex", status: "all" },
+      cursor: "offset:0",
+      limit: 10,
+    });
+
+    expect(invokeMock).toHaveBeenCalledWith("list_global_codex_sessions", {
+      query: { keyword: "archive", engine: "codex", status: "all" },
+      cursor: "offset:0",
+      limit: 10,
+    });
+  });
+
+  it("maps related codex session list options to list_project_related_codex_sessions", async () => {
+    const invokeMock = vi.mocked(invoke);
+    invokeMock.mockResolvedValueOnce({
+      data: [],
+      nextCursor: "offset:5",
+      partialSource: null,
+    });
+
+    await listProjectRelatedCodexSessions("ws-2", {
+      query: { keyword: "feature", engine: "codex", status: "active" },
+      cursor: "offset:0",
+      limit: 5,
+    });
+
+    expect(invokeMock).toHaveBeenCalledWith("list_project_related_codex_sessions", {
+      workspaceId: "ws-2",
+      query: { keyword: "feature", engine: "codex", status: "active" },
+      cursor: "offset:0",
+      limit: 5,
+    });
+  });
+
+  it("maps workspace projection summary requests", async () => {
+    const invokeMock = vi.mocked(invoke);
+    invokeMock.mockResolvedValueOnce({
+      scopeKind: "project",
+      ownerWorkspaceIds: ["ws-2", "ws-3"],
+      activeTotal: 8,
+      archivedTotal: 2,
+      allTotal: 10,
+      filteredTotal: 8,
+      partialSources: [],
+    });
+
+    await getWorkspaceSessionProjectionSummary("ws-2", {
+      query: { keyword: "feature", engine: "codex", status: "active" },
+    });
+
+    expect(invokeMock).toHaveBeenCalledWith("get_workspace_session_projection_summary", {
+      workspaceId: "ws-2",
+      query: { keyword: "feature", engine: "codex", status: "active" },
     });
   });
 

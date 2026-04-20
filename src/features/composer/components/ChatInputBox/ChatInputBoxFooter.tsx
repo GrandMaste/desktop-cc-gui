@@ -163,6 +163,8 @@ export function ChatInputBoxFooter({
   currentProvider,
   providerAvailability,
   providerVersions,
+  providerStatusLabels,
+  providerDisabledMessages,
   reasoningEffort,
   accountRateLimits,
   usageShowRemaining,
@@ -212,6 +214,8 @@ export function ChatInputBoxFooter({
   currentProvider: string;
   providerAvailability?: Partial<Record<ProviderId, boolean>>;
   providerVersions?: Partial<Record<ProviderId, string | null>>;
+  providerStatusLabels?: Partial<Record<ProviderId, string | null>>;
+  providerDisabledMessages?: Partial<Record<ProviderId, string | null>>;
   reasoningEffort: ReasoningEffort;
   accountRateLimits?: AccountRateLimitsInfo | null;
   usageShowRemaining?: boolean;
@@ -372,6 +376,8 @@ export function ChatInputBoxFooter({
         currentProvider={currentProvider}
         providerAvailability={providerAvailability}
         providerVersions={providerVersions}
+        providerStatusLabels={providerStatusLabels}
+        providerDisabledMessages={providerDisabledMessages}
         reasoningEffort={reasoningEffort}
         accountRateLimits={accountRateLimits}
         usageShowRemaining={usageShowRemaining}

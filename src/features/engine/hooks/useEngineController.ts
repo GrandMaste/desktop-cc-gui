@@ -12,6 +12,7 @@ import {
   getActiveEngine,
   getEngineModels,
   getOpenCodeCommandsList,
+  getOpenCodeProviderHealth,
   isWebServiceRuntime,
   switchEngine,
 } from "../../../services/tauri";
@@ -41,6 +42,8 @@ export type EngineDisplayInfo = {
   installed: boolean;
   version: string | null;
   error: string | null;
+  availabilityState?: "loading" | "ready" | "requires-login" | "unavailable";
+  availabilityLabelKey?: string | null;
 };
 
 /**
@@ -58,6 +61,7 @@ const ENGINE_DISPLAY_MAP: Record<
 
 const GEMINI_VENDOR_UPDATED_EVENT = "ccgui:gemini-vendor-updated";
 const WEB_RUNTIME_DEFAULT_ENGINE: EngineType = "codex";
+const ENGINE_TYPES: EngineType[] = ["claude", "codex", "gemini", "opencode"];
 const WEB_RUNTIME_INITIAL_STATUSES: EngineStatus[] = [
   {
     engineType: "codex",
@@ -256,13 +260,54 @@ export function useEngineController({
   const [isInitialized, setIsInitialized] = useState(false);
   const [modelMapping, setModelMapping] = useState(getModelMapping);
   const [customModelsVersion, setCustomModelsVersion] = useState(0);
+  const [openCodeProviderConnected, setOpenCodeProviderConnected] = useState<boolean | null>(null);
+  const [isOpenCodeProviderStateLoading, setIsOpenCodeProviderStateLoading] = useState(false);
 
   // Track initialization
   const initRef = useRef(false);
   const lastWorkspaceId = useRef<string | null>(null);
+  const openCodeProviderHealthRequestIdRef = useRef(0);
 
   const workspaceId = activeWorkspace?.id ?? null;
   const isConnected = Boolean(activeWorkspace?.connected);
+
+  const refreshOpenCodeProviderState = useCallback(
+    async (statuses: EngineStatus[]) => {
+      const requestId = ++openCodeProviderHealthRequestIdRef.current;
+      const opencodeStatus = statuses.find((status) => status.engineType === "opencode");
+      if (!workspaceId || !isConnected || !opencodeStatus?.installed) {
+        setIsOpenCodeProviderStateLoading(false);
+        setOpenCodeProviderConnected(null);
+        return;
+      }
+
+      setIsOpenCodeProviderStateLoading(true);
+      try {
+        const providerHealth = await getOpenCodeProviderHealth(workspaceId, null);
+        if (openCodeProviderHealthRequestIdRef.current !== requestId) {
+          return;
+        }
+        setOpenCodeProviderConnected(providerHealth.connected);
+      } catch (error) {
+        if (openCodeProviderHealthRequestIdRef.current !== requestId) {
+          return;
+        }
+        onDebug?.({
+          id: `${Date.now()}-opencode-provider-health-error`,
+          timestamp: Date.now(),
+          source: "error",
+          label: "opencode/provider health error",
+          payload: error instanceof Error ? error.message : String(error),
+        });
+        setOpenCodeProviderConnected(null);
+      } finally {
+        if (openCodeProviderHealthRequestIdRef.current === requestId) {
+          setIsOpenCodeProviderStateLoading(false);
+        }
+      }
+    },
+    [isConnected, onDebug, workspaceId],
+  );
 
   const loadModelsForEngine = useCallback(
     async (engineType: EngineType, fallbackModels: EngineModelInfo[] = []) => {
@@ -350,6 +395,7 @@ export function useEngineController({
       setEngineStatuses(statuses);
       setActiveEngineState(currentEngine);
       setIsInitialized(true);
+      await refreshOpenCodeProviderState(statuses);
 
       // Get models from the detected status first.
       const currentStatus = statuses.find((s) => s.engineType === currentEngine);
@@ -375,7 +421,7 @@ export function useEngineController({
     } finally {
       setIsDetecting(false);
     }
-  }, [isDetecting, loadModelsForEngine, onDebug]);
+  }, [isDetecting, loadModelsForEngine, onDebug, refreshOpenCodeProviderState]);
 
   /**
    * Switch to a different engine
@@ -441,17 +487,59 @@ export function useEngineController({
    * Get display information for all engines
    */
   const availableEngines = useMemo((): EngineDisplayInfo[] => {
-    return engineStatuses.map((status) => ({
-      type: status.engineType,
-      displayName:
-        ENGINE_DISPLAY_MAP[status.engineType]?.displayName ?? status.engineType,
-      shortName:
-        ENGINE_DISPLAY_MAP[status.engineType]?.shortName ?? status.engineType,
-      installed: status.installed,
-      version: status.version,
-      error: status.error,
-    }));
-  }, [engineStatuses]);
+    return ENGINE_TYPES.map((engineType) => {
+      const status = engineStatuses.find((entry) => entry.engineType === engineType) ?? null;
+      const baseInfo = ENGINE_DISPLAY_MAP[engineType];
+      let availabilityState: EngineDisplayInfo["availabilityState"] = "unavailable";
+      let availabilityLabelKey: string | null = "sidebar.cliNotInstalled";
+
+      if (!isInitialized) {
+        availabilityState = "loading";
+        availabilityLabelKey = "workspace.engineStatusLoading";
+      } else if (status?.installed) {
+        availabilityState = "ready";
+        availabilityLabelKey = null;
+      }
+
+      if (
+        isInitialized &&
+        engineType === "opencode" &&
+        status?.installed &&
+        workspaceId &&
+        isConnected &&
+        isOpenCodeProviderStateLoading
+      ) {
+        availabilityState = "loading";
+        availabilityLabelKey = "workspace.engineStatusLoading";
+      } else if (
+        isInitialized &&
+        engineType === "opencode" &&
+        status?.installed &&
+        openCodeProviderConnected === false
+      ) {
+        availabilityState = "requires-login";
+        availabilityLabelKey = "workspace.engineStatusRequiresLogin";
+      }
+
+      return {
+        type: engineType,
+        displayName: baseInfo?.displayName ?? engineType,
+        shortName: baseInfo?.shortName ?? engineType,
+        installed: status?.installed ?? false,
+        version: availabilityState === "loading" ? null : (status?.version ?? null),
+        error: status?.error ?? null,
+        availabilityState,
+        availabilityLabelKey,
+      };
+    });
+  }, [
+    engineStatuses,
+    isConnected,
+    isInitialized,
+    isOpenCodeProviderStateLoading,
+    openCodeProviderConnected,
+    workspaceId,
+  ]);
 
   /**
    * Get display information for installed engines only
@@ -594,13 +682,16 @@ export function useEngineController({
     if (workspaceId && isConnected && currentEngineStatus?.installed) {
       void loadModelsForEngine(activeEngine, currentEngineStatus.models);
     }
+    void refreshOpenCodeProviderState(engineStatuses);
   }, [
     workspaceId,
     isConnected,
     activeEngine,
     currentEngineStatus?.installed,
     currentEngineStatus?.models,
+    engineStatuses,
     loadModelsForEngine,
+    refreshOpenCodeProviderState,
   ]);
 
   return {
