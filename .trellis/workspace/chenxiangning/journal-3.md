@@ -1321,3 +1321,65 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 91: 修复历史展开后的消息视口跳动
+
+**Date**: 2026-04-22
+**Task**: 修复历史展开后的消息视口跳动
+**Branch**: `feature/v-0.4.7`
+
+### Summary
+
+(Add summary)
+
+### Main Changes
+
+任务目标
+- 修复消息幕布中点击“显示之前的 N 条消息”后视口跳到更早历史顶部的问题。
+- 为 collapsed history reveal 补齐 scroll restoration 行为，并保持 history sticky / live sticky 语义不变。
+- 同步补齐 OpenSpec change 与 Trellis task 记录。
+
+主要改动
+- 在 src/features/messages/components/Messages.tsx 中新增 history reveal 前的滚动快照记录与 layout 阶段恢复逻辑。
+- 为滚动恢复补充非有限数值保护，异常 scrollTop / scrollHeight 场景下跳过恢复，避免污染滚动状态。
+- 将“显示之前的消息”入口收口到专用 handler，只在 collapsed history reveal 路径触发恢复逻辑。
+- 在 src/features/messages/components/Messages.live-behavior.test.tsx 中扩展 scroller metrics mock，新增正常恢复与异常指标跳过恢复两条回归测试。
+- 新建 openspec/changes/fix-history-expansion-scroll-restoration/ proposal、spec、design、tasks，并创建/归档对应 Trellis task。
+
+涉及模块
+- src/features/messages/components/Messages.tsx
+- src/features/messages/components/Messages.live-behavior.test.tsx
+- openspec/changes/fix-history-expansion-scroll-restoration/*
+- .trellis/tasks/04-21-fix-history-expansion-scroll-restoration/task.json
+
+验证结果
+- pnpm vitest run src/features/messages/components/Messages.live-behavior.test.tsx src/features/messages/components/Messages.test.tsx
+- npx eslint src/features/messages/components/Messages.tsx src/features/messages/components/Messages.live-behavior.test.tsx
+- npm run typecheck
+- npm run check:large-files
+- openspec validate fix-history-expansion-scroll-restoration --type change --strict --no-interactive
+- 结果：消息相关 99 条测试通过，typecheck 通过，large-file threshold 检查通过，OpenSpec strict validate 通过。
+
+后续事项
+- 如需继续推进，可执行 openspec-archive-change 归档 fix-history-expansion-scroll-restoration。
+- 工作区仍有其他未完成的 planning change 未提交，本次 session 未包含它们。
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `8a2c6450eac0675890e36aab6b1cdb2b46a3638a` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
