@@ -382,6 +382,13 @@ type UseThreadsOptions = {
     effectiveUiMode: "plan" | "default";
     fallbackReason: string | null;
   }) => void;
+  runWithCreateSessionLoading?: <T>(
+    params: {
+      workspace: WorkspaceInfo;
+      engine: "claude" | "codex" | "gemini" | "opencode";
+    },
+    action: () => Promise<T>,
+  ) => Promise<T>;
 };
 
 type PendingResolutionInput = {
@@ -536,6 +543,7 @@ export function useThreads({
   resolveCollaborationUiMode,
   resolveCollaborationRuntimeMode,
   onCollaborationModeResolved,
+  runWithCreateSessionLoading,
 }: UseThreadsOptions) {
   const [state, dispatch] = useReducer(
     threadReducer,
@@ -1604,6 +1612,7 @@ export function useThreads({
     resolveOpenCodeVariant,
     onInputMemoryCaptured: handleInputMemoryCaptured,
     resolveCollaborationRuntimeMode,
+    runWithCreateSessionLoading,
   });
 
   const setActiveThreadId = useCallback(
