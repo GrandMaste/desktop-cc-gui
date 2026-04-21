@@ -308,7 +308,7 @@ export const Messages = memo(function Messages({
   >({});
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [activeAnchorId, setActiveAnchorId] = useState<string | null>(null);
-  const [activeHistoryStickyMessageId, setActiveHistoryStickyMessageId] = useState<string | null>(null);
+  const [activeStickyMessageId, setActiveStickyMessageId] = useState<string | null>(null);
   const [showAllHistoryItems, setShowAllHistoryItems] = useState(false);
   const [liveAutoFollowEnabled, setLiveAutoFollowEnabled] = useState(() =>
     readLocalBooleanFlag(MESSAGES_LIVE_AUTO_FOLLOW_FLAG_KEY, true),
@@ -1000,8 +1000,6 @@ export const Messages = memo(function Messages({
     ? timelineItems.length - VISIBLE_MESSAGE_WINDOW
     : 0;
   const enableCollaborationBadge = activeEngine === "codex";
-  const historyStickyEnabled =
-    !isThinking || Boolean(conversationState?.meta.historyRestoredAtMs);
   const latestLiveStickyUserMessageId = useMemo(
     () =>
       isThinking && !conversationState?.meta.historyRestoredAtMs
@@ -1025,9 +1023,6 @@ export const Messages = memo(function Messages({
     ],
   );
   const historyStickyCandidates = useMemo(() => {
-    if (!historyStickyEnabled) {
-      return [] as HistoryStickyCandidate[];
-    }
     const candidates: HistoryStickyCandidate[] = [];
     for (const item of renderedItems) {
       if (!isOrdinaryUserQuestionItem(item, enableCollaborationBadge)) {
@@ -1045,17 +1040,17 @@ export const Messages = memo(function Messages({
       });
     }
     return candidates;
-  }, [enableCollaborationBadge, historyStickyEnabled, renderedItems]);
-  const historyStickyCandidateById = useMemo(
+  }, [enableCollaborationBadge, renderedItems]);
+  const stickyCandidateById = useMemo(
     () => new Map(historyStickyCandidates.map((candidate) => [candidate.id, candidate])),
     [historyStickyCandidates],
   );
-  const activeHistoryStickyCandidate = useMemo(
+  const activeStickyHeaderCandidate = useMemo(
     () =>
-      activeHistoryStickyMessageId
-        ? historyStickyCandidateById.get(activeHistoryStickyMessageId) ?? null
+      activeStickyMessageId
+        ? stickyCandidateById.get(activeStickyMessageId) ?? null
         : null,
-    [activeHistoryStickyMessageId, historyStickyCandidateById],
+    [activeStickyMessageId, stickyCandidateById],
   );
   const messageAnchors = useMemo(() => {
     const messageItems = renderedItems.filter(
@@ -1076,7 +1071,7 @@ export const Messages = memo(function Messages({
     });
   }, [renderedItems]);
   const hasAnchorRail = showMessageAnchors && messageAnchors.length > 1;
-  const computeActiveHistoryStickyMessageId = useCallback(
+  const computeActiveStickyMessageId = useCallback(
     (candidates: HistoryStickyCandidate[]) => {
       const container = containerRef.current;
       if (!container || candidates.length === 0) {
@@ -1130,9 +1125,9 @@ export const Messages = memo(function Messages({
     },
     [computeActiveAnchor, hasAnchorRail, messageAnchors, threadId],
   );
-  const scheduleHistoryStickyUpdate = useCallback(
+  const scheduleStickyHeaderUpdate = useCallback(
     (reason: "scroll" | "sync") => {
-      if (!historyStickyEnabled || historyStickyCandidates.length === 0) {
+      if (historyStickyCandidates.length === 0) {
         return;
       }
       if (historyStickyUpdateRafRef.current !== null) {
@@ -1142,28 +1137,27 @@ export const Messages = memo(function Messages({
         historyStickyUpdateRafRef.current = null;
         const stickyStartedAt =
           typeof performance === "undefined" ? 0 : performance.now();
-        const nextStickyId = computeActiveHistoryStickyMessageId(historyStickyCandidates);
+        const nextStickyId = computeActiveStickyMessageId(historyStickyCandidates);
         const elapsedMs =
           typeof performance === "undefined"
             ? 0
             : performance.now() - stickyStartedAt;
         if (elapsedMs >= MESSAGES_SLOW_ANCHOR_WARN_MS) {
-          logMessagesPerf("history-sticky.compute", {
+          logMessagesPerf("sticky-header.compute", {
             ms: Number(elapsedMs.toFixed(2)),
             reason,
             candidateCount: historyStickyCandidates.length,
             threadId,
           });
         }
-        setActiveHistoryStickyMessageId((previous) =>
+        setActiveStickyMessageId((previous) =>
           previous === nextStickyId ? previous : nextStickyId,
         );
       });
     },
     [
-      computeActiveHistoryStickyMessageId,
+      computeActiveStickyMessageId,
       historyStickyCandidates,
-      historyStickyEnabled,
       threadId,
     ],
   );
@@ -1189,11 +1183,11 @@ export const Messages = memo(function Messages({
       return;
     }
     scheduleAnchorUpdate("sync");
-    scheduleHistoryStickyUpdate("sync");
+    scheduleStickyHeaderUpdate("sync");
   }, [
     renderedItems,
     scheduleAnchorUpdate,
-    scheduleHistoryStickyUpdate,
+    scheduleStickyHeaderUpdate,
     showAllHistoryItems,
   ]);
   const updateAutoScroll = useCallback(() => {
@@ -1204,12 +1198,12 @@ export const Messages = memo(function Messages({
     const nearBottom = isNearBottom(container);
     autoScrollRef.current = liveAutoFollowEnabled ? true : nearBottom;
     scheduleAnchorUpdate("scroll");
-    scheduleHistoryStickyUpdate("scroll");
+    scheduleStickyHeaderUpdate("scroll");
   }, [
     isNearBottom,
     liveAutoFollowEnabled,
     scheduleAnchorUpdate,
-    scheduleHistoryStickyUpdate,
+    scheduleStickyHeaderUpdate,
   ]);
   const clearTransientUiState = useCallback(() => {
     if (copyTimeoutRef.current) {
@@ -1311,19 +1305,18 @@ export const Messages = memo(function Messages({
   }, [hasAnchorRail, messageAnchors, scheduleAnchorUpdate, scrollKey, threadId]);
 
   useEffect(() => {
-    if (!historyStickyEnabled || historyStickyCandidates.length === 0) {
+    if (historyStickyCandidates.length === 0) {
       if (historyStickyUpdateRafRef.current !== null) {
         window.cancelAnimationFrame(historyStickyUpdateRafRef.current);
         historyStickyUpdateRafRef.current = null;
       }
-      setActiveHistoryStickyMessageId(null);
+      setActiveStickyMessageId(null);
       return;
     }
-    scheduleHistoryStickyUpdate("sync");
+    scheduleStickyHeaderUpdate("sync");
   }, [
     historyStickyCandidates,
-    historyStickyEnabled,
-    scheduleHistoryStickyUpdate,
+    scheduleStickyHeaderUpdate,
     scrollKey,
     threadId,
   ]);
@@ -1581,7 +1574,7 @@ export const Messages = memo(function Messages({
         <MessagesTimeline
           activeCollaborationModeId={activeCollaborationModeId}
           activeEngine={activeEngine}
-          activeHistoryStickyCandidate={activeHistoryStickyCandidate}
+          activeStickyHeaderCandidate={activeStickyHeaderCandidate}
           activeUserInputRequestId={activeUserInputRequestId}
           agentTaskNodeByTaskIdRef={agentTaskNodeByTaskIdRef}
           agentTaskNodeByToolUseIdRef={agentTaskNodeByToolUseIdRef}
@@ -1606,7 +1599,6 @@ export const Messages = memo(function Messages({
           lastDurationMs={lastDurationMs}
           latestAssistantMessageId={latestAssistantMessageId}
           latestReasoningLabel={latestReasoningLabel}
-          latestLiveStickyUserMessageId={latestLiveStickyUserMessageId}
           latestReasoningId={latestReasoningId}
           latestRetryMessage={latestRetryMessage}
           latestRuntimeReconnectItemId={latestRuntimeReconnectItemId}

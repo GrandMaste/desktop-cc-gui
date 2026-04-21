@@ -19,8 +19,8 @@ use crate::state::AppState;
 use crate::types::{AppSettings, WorkspaceEntry};
 
 use self::process_diagnostics::{
-    build_engine_observability, current_host_untracked_engine_roots,
-    merge_process_diagnostics, snapshot_process_diagnostics, terminate_pid_tree,
+    build_engine_observability, current_host_untracked_engine_roots, merge_process_diagnostics,
+    snapshot_process_diagnostics, terminate_pid_tree,
 };
 
 const LEDGER_FILE_NAME: &str = "runtime-pool-ledger.json";
@@ -831,6 +831,28 @@ impl RuntimeManager {
             runtime.last_probe_failure_source = Some(source.to_string());
             runtime.last_recovery_source = Some(source.to_string());
             runtime.last_guard_state = Some("probe-failed".to_string());
+            if runtime.startup_state == Some(RuntimeStartupState::Ready) {
+                runtime.startup_state = Some(RuntimeStartupState::SuspectStale);
+            }
+        }
+        drop(entries);
+        let _ = self.persist_ledger().await;
+    }
+
+    pub(crate) async fn note_stale_session_rejection(
+        &self,
+        engine: &str,
+        workspace_id: &str,
+        source: &str,
+        reason: &str,
+    ) {
+        let key = runtime_key(engine, workspace_id);
+        let mut entries = self.entries.lock().await;
+        if let Some(runtime) = entries.get_mut(&key) {
+            runtime.last_probe_failure = Some(reason.to_string());
+            runtime.last_probe_failure_source = Some(source.to_string());
+            runtime.last_recovery_source = Some(source.to_string());
+            runtime.last_guard_state = Some("pre-probe-rejected".to_string());
             if runtime.startup_state == Some(RuntimeStartupState::Ready) {
                 runtime.startup_state = Some(RuntimeStartupState::SuspectStale);
             }

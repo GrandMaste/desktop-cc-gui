@@ -733,28 +733,6 @@
   content-visibility: visible;
 }
 
-.messages-live-sticky-user-message {
-  position: sticky;
-  top: 0;
-  z-index: 6;
-  padding-top: 0;
-  padding-bottom: 6px;
-  background: linear-gradient(
-    180deg,
-    var(--surface-messages) 0%,
-    var(--surface-messages) 74%,
-    color-mix(in srgb, var(--surface-messages) 0%, transparent) 100%
-  );
-}
-
-.messages-live-sticky-user-message .message {
-  content-visibility: visible;
-}
-
-.main .messages-live-sticky-user-message {
-  top: var(--main-topbar-height);
-}
-
 @media (prefers-reduced-motion: reduce) {
   .working.is-waiting .working-spinner,
   .working.is-ingress .working-spinner {

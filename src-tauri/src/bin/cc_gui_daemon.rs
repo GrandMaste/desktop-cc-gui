@@ -86,6 +86,14 @@ mod codex {
     ) -> Result<(), String> {
         Err("runtime control commands are unavailable in daemon mode".to_string())
     }
+    pub(crate) async fn start_thread_with_runtime_retry(
+        _workspace_id: &str,
+        _model: Option<String>,
+        _state: &crate::state::AppState,
+        _app: &tauri::AppHandle,
+    ) -> Result<serde_json::Value, String> {
+        Err("runtime control commands are unavailable in daemon mode".to_string())
+    }
     pub(crate) mod args {
         pub(crate) use crate::codex_args::*;
     }

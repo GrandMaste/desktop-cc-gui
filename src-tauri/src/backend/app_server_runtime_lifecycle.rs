@@ -42,6 +42,24 @@ impl WorkspaceSession {
         self.manual_shutdown_requested.store(true, Ordering::SeqCst);
     }
 
+    pub(crate) fn has_manual_shutdown_requested(&self) -> bool {
+        self.manual_shutdown_requested.load(Ordering::SeqCst)
+    }
+
+    pub(crate) fn has_runtime_end_emitted(&self) -> bool {
+        self.runtime_end_emitted.load(Ordering::SeqCst)
+    }
+
+    pub(crate) fn stale_reuse_reason(&self) -> Option<&'static str> {
+        if self.has_manual_shutdown_requested() {
+            Some("manual-shutdown-requested")
+        } else if self.has_runtime_end_emitted() {
+            Some("runtime-end-emitted")
+        } else {
+            None
+        }
+    }
+
     async fn collect_runtime_end_context(&self) -> RuntimeEndContext {
         let active_turns = self.active_turns.lock().await.clone();
         let timed_out_requests = self.timed_out_requests.lock().await.clone();

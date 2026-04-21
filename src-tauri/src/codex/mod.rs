@@ -41,6 +41,9 @@ use crate::state::AppState;
 use crate::types::WorkspaceEntry;
 
 pub(crate) use self::session_runtime::ensure_codex_session;
+pub(crate) use self::session_runtime::{
+    create_session_runtime_recovering_error, is_stopping_runtime_race_error,
+};
 
 const DELETE_ARCHIVE_TIMEOUT_MS: u64 = 2_000;
 const CLAUDE_MANUAL_COMPACT_TIMEOUT_SECS: u64 = 120;
@@ -49,6 +52,66 @@ fn normalize_model_id(candidate: Option<String>) -> Option<String> {
     candidate
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
+}
+
+async fn run_start_thread_with_retry<FEnsure, FEnsureFuture, FStart, FStartFuture>(
+    workspace_id: &str,
+    ensure_runtime: FEnsure,
+    start_thread: FStart,
+) -> Result<Value, String>
+where
+    FEnsure: Fn() -> FEnsureFuture,
+    FEnsureFuture: std::future::Future<Output = Result<(), String>>,
+    FStart: Fn() -> FStartFuture,
+    FStartFuture: std::future::Future<Output = Result<Value, String>>,
+{
+    ensure_runtime().await?;
+    let first_attempt = start_thread().await;
+    match first_attempt {
+        Ok(response) => Ok(response),
+        Err(error) if is_stopping_runtime_race_error(&error) => {
+            log::warn!(
+                "[start_thread] retrying after stopping runtime race for workspace {}: {}",
+                workspace_id,
+                error
+            );
+            ensure_runtime().await?;
+            match start_thread().await {
+                Ok(response) => Ok(response),
+                Err(retry_error) if is_stopping_runtime_race_error(&retry_error) => {
+                    log::warn!(
+                        "[start_thread] stopping runtime race retry exhausted for workspace {}: {}",
+                        workspace_id,
+                        retry_error
+                    );
+                    Err(create_session_runtime_recovering_error())
+                }
+                Err(retry_error) => Err(retry_error),
+            }
+        }
+        Err(error) => Err(error),
+    }
+}
+
+pub(crate) async fn start_thread_with_runtime_retry(
+    workspace_id: &str,
+    model: Option<String>,
+    state: &AppState,
+    app: &AppHandle,
+) -> Result<Value, String> {
+    let normalized_model = normalize_model_id(model);
+    run_start_thread_with_retry(
+        workspace_id,
+        || ensure_codex_session(workspace_id, state, app),
+        || {
+            codex_core::start_thread_core(
+                &state.sessions,
+                workspace_id.to_string(),
+                normalized_model.clone(),
+            )
+        },
+    )
+    .await
 }
 
 fn emit_manual_compaction_event(
@@ -371,11 +434,8 @@ pub(crate) async fn start_thread(
         .await;
     }
 
-    // Ensure Codex session exists before starting thread
-    ensure_codex_session(&workspace_id, &state, &app).await?;
     let resolved_model = resolve_workspace_fallback_model(&state, &workspace_id).await;
-
-    codex_core::start_thread_core(&state.sessions, workspace_id, resolved_model).await
+    start_thread_with_runtime_retry(&workspace_id, resolved_model, &state, &app).await
 }
 
 #[tauri::command]
@@ -2134,10 +2194,15 @@ mod tests {
         build_local_codex_session_preview, build_thread_list_empty_response,
         codex_session_identifier_candidates, merge_unified_codex_thread_entries,
     };
-    use super::{normalize_model_id, pick_model_from_model_list_response};
+    use super::{
+        create_session_runtime_recovering_error, normalize_model_id,
+        pick_model_from_model_list_response, run_start_thread_with_retry,
+    };
     use crate::types::{LocalUsageSessionSummary, LocalUsageUsageData};
     use serde_json::json;
     use std::collections::HashSet;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
 
     #[test]
     fn normalize_model_id_trims_and_filters_empty() {
@@ -2448,5 +2513,123 @@ mod tests {
         assert_eq!(merged.len(), 1);
         assert_eq!(merged[0]["id"], "rollout-2026-04-10T10-00-00-session-123");
         assert_eq!(merged[0]["cwd"], "/tmp/workspace");
+    }
+
+    #[tokio::test]
+    async fn start_thread_retry_reacquires_after_manual_shutdown_race() {
+        let ensure_calls = Arc::new(AtomicUsize::new(0));
+        let start_calls = Arc::new(AtomicUsize::new(0));
+
+        let result = run_start_thread_with_retry(
+            "ws-1",
+            {
+                let ensure_calls = Arc::clone(&ensure_calls);
+                move || {
+                    let ensure_calls = Arc::clone(&ensure_calls);
+                    async move {
+                        ensure_calls.fetch_add(1, Ordering::SeqCst);
+                        Ok(())
+                    }
+                }
+            },
+            {
+                let start_calls = Arc::clone(&start_calls);
+                move || {
+                    let start_calls = Arc::clone(&start_calls);
+                    async move {
+                        let attempt = start_calls.fetch_add(1, Ordering::SeqCst);
+                        if attempt == 0 {
+                            Err(
+                                "[RUNTIME_ENDED] Managed runtime stopped after manual shutdown."
+                                    .to_string(),
+                            )
+                        } else {
+                            Ok(json!({ "result": { "threadId": "thread-recovered" } }))
+                        }
+                    }
+                }
+            },
+        )
+        .await
+        .expect("manual shutdown race should retry once");
+
+        assert_eq!(result["result"]["threadId"], "thread-recovered");
+        assert_eq!(ensure_calls.load(Ordering::SeqCst), 2);
+        assert_eq!(start_calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn start_thread_retry_does_not_retry_non_runtime_shutdown_errors() {
+        let ensure_calls = Arc::new(AtomicUsize::new(0));
+        let start_calls = Arc::new(AtomicUsize::new(0));
+
+        let error = run_start_thread_with_retry(
+            "ws-1",
+            {
+                let ensure_calls = Arc::clone(&ensure_calls);
+                move || {
+                    let ensure_calls = Arc::clone(&ensure_calls);
+                    async move {
+                        ensure_calls.fetch_add(1, Ordering::SeqCst);
+                        Ok(())
+                    }
+                }
+            },
+            {
+                let start_calls = Arc::clone(&start_calls);
+                move || {
+                    let start_calls = Arc::clone(&start_calls);
+                    async move {
+                        start_calls.fetch_add(1, Ordering::SeqCst);
+                        Err("workspace not connected".to_string())
+                    }
+                }
+            },
+        )
+        .await
+        .expect_err("non-runtime errors should surface directly");
+
+        assert_eq!(error, "workspace not connected");
+        assert_eq!(ensure_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(start_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn start_thread_retry_returns_recoverable_error_when_stopping_race_persists() {
+        let ensure_calls = Arc::new(AtomicUsize::new(0));
+        let start_calls = Arc::new(AtomicUsize::new(0));
+
+        let error = run_start_thread_with_retry(
+            "ws-1",
+            {
+                let ensure_calls = Arc::clone(&ensure_calls);
+                move || {
+                    let ensure_calls = Arc::clone(&ensure_calls);
+                    async move {
+                        ensure_calls.fetch_add(1, Ordering::SeqCst);
+                        Ok(())
+                    }
+                }
+            },
+            {
+                let start_calls = Arc::clone(&start_calls);
+                move || {
+                    let start_calls = Arc::clone(&start_calls);
+                    async move {
+                        start_calls.fetch_add(1, Ordering::SeqCst);
+                        Err(
+                            "[RUNTIME_ENDED] Managed runtime stopped after manual shutdown."
+                                .to_string(),
+                        )
+                    }
+                }
+            },
+        )
+        .await
+        .expect_err("persistent stopping race should surface recoverable error");
+
+        assert_eq!(error, create_session_runtime_recovering_error());
+        assert_eq!(ensure_calls.load(Ordering::SeqCst), 2);
+        assert_eq!(start_calls.load(Ordering::SeqCst), 2);
     }
 }

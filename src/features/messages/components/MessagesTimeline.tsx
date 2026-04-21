@@ -37,7 +37,7 @@ import {
 type MessagesTimelineProps = {
   activeCollaborationModeId: string | null;
   activeEngine: MessagesEngine;
-  activeHistoryStickyCandidate: HistoryStickyCandidate | null;
+  activeStickyHeaderCandidate: HistoryStickyCandidate | null;
   activeUserInputRequestId: string | number | null;
   agentTaskNodeByTaskIdRef: MutableRefObject<Map<string, HTMLDivElement>>;
   agentTaskNodeByToolUseIdRef: MutableRefObject<Map<string, HTMLDivElement>>;
@@ -71,7 +71,6 @@ type MessagesTimelineProps = {
   lastDurationMs: number | null;
   latestAssistantMessageId: string | null;
   latestReasoningLabel: string | null;
-  latestLiveStickyUserMessageId: string | null;
   latestReasoningId: string | null;
   latestRetryMessage: Pick<QueuedMessage, "text" | "images"> | null;
   latestRuntimeReconnectItemId: string | null;
@@ -111,7 +110,7 @@ type MessagesTimelineProps = {
 export function MessagesTimeline({
   activeCollaborationModeId,
   activeEngine,
-  activeHistoryStickyCandidate,
+  activeStickyHeaderCandidate,
   activeUserInputRequestId,
   agentTaskNodeByTaskIdRef,
   agentTaskNodeByToolUseIdRef,
@@ -136,7 +135,6 @@ export function MessagesTimeline({
   lastDurationMs,
   latestAssistantMessageId,
   latestReasoningLabel,
-  latestLiveStickyUserMessageId,
   latestReasoningId,
   latestRetryMessage,
   latestRuntimeReconnectItemId,
@@ -223,13 +221,6 @@ export function MessagesTimeline({
           )}
           <div
             ref={bindMessageNode}
-            className={[
-              item.id === latestLiveStickyUserMessageId
-                ? "messages-live-sticky-user-message"
-                : "",
-            ]
-              .filter(Boolean)
-              .join(" ") || undefined}
             data-message-anchor-id={item.id}
             data-agent-task-id={agentTaskNotification?.taskId ?? undefined}
             data-agent-tool-use-id={agentTaskNotification?.toolUseId ?? undefined}
@@ -396,17 +387,17 @@ export function MessagesTimeline({
 
   return (
     <>
-      {activeHistoryStickyCandidate && (
+      {activeStickyHeaderCandidate && (
         <div
           className="messages-history-sticky-header"
-          data-history-sticky-message-id={activeHistoryStickyCandidate.id}
+          data-history-sticky-message-id={activeStickyHeaderCandidate.id}
           aria-hidden="true"
         >
           <div className="messages-history-sticky-header-inner">
             <div className="messages-history-sticky-header-content">
               <div className="messages-history-sticky-header-bubble">
                 <div className="messages-history-sticky-header-text">
-                  {activeHistoryStickyCandidate.text}
+                  {activeStickyHeaderCandidate.text}
                 </div>
               </div>
             </div>
