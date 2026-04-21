@@ -238,6 +238,44 @@ describe("Messages runtime reconnect", () => {
     ).toBeTruthy();
   });
 
+  it("shows a recover-only action for stale thread recovery when a rebind callback exists", async () => {
+    vi.mocked(ensureRuntimeReady).mockResolvedValue(undefined);
+    const onRecoverThreadRuntime = vi.fn().mockResolvedValue("thread-recovered-only");
+
+    renderMessages([
+      {
+        id: "user-before-thread-recover-only",
+        kind: "message",
+        role: "user",
+        text: "继续",
+      },
+      {
+        id: "assistant-thread-recover-only",
+        kind: "message",
+        role: "assistant",
+        text: "会话启动失败： thread not found: legacy-thread-id",
+      },
+    ], {
+      threadId: "thread-runtime-stale-recover-only",
+      onRecoverThreadRuntime,
+    });
+
+    expect(screen.getByRole("button", { name: "messages.threadRecoveryAction" })).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "messages.threadRecoveryResendAction" }),
+    ).toHaveProperty("disabled", true);
+
+    fireEvent.click(screen.getByRole("button", { name: "messages.threadRecoveryAction" }));
+
+    await waitFor(() => {
+      expect(vi.mocked(ensureRuntimeReady)).toHaveBeenCalledWith("ws-runtime");
+      expect(onRecoverThreadRuntime).toHaveBeenCalledWith(
+        "ws-runtime",
+        "thread-runtime-stale-recover-only",
+      );
+    });
+  });
+
   it("reacquires runtime before resending from a stale thread recovery card", async () => {
     vi.mocked(ensureRuntimeReady).mockResolvedValue(undefined);
     const onRecoverThreadRuntime = vi.fn().mockResolvedValue("thread-recovered-resend");

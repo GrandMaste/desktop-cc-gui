@@ -8,13 +8,13 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use tauri::{AppHandle, Emitter};
 use tokio::io::AsyncWriteExt;
-use tokio::process::{Child, ChildStdin};
 #[cfg(test)]
 use tokio::process::Command;
+use tokio::process::{Child, ChildStdin};
 use tokio::sync::{mpsc, oneshot, Mutex};
 use tokio::time::timeout;
-use tauri::{AppHandle, Emitter};
 
 use crate::backend::events::{AppServerEvent, EventSink};
 use crate::codex::args::{apply_codex_args, parse_codex_args};
@@ -472,6 +472,10 @@ impl WorkspaceSession {
         }
     }
 
+    pub(crate) fn default_request_timeout(&self) -> Duration {
+        Duration::from_secs(DEFAULT_REQUEST_TIMEOUT_SECS)
+    }
+
     pub(crate) fn initial_turn_start_timeout(&self) -> Duration {
         Duration::from_millis(resolve_initial_turn_start_timeout_ms())
     }
@@ -511,6 +515,18 @@ impl WorkspaceSession {
         }
     }
 
+    pub(crate) async fn note_codex_thread_create_pending(&self, timeout_duration: Duration) {
+        if let Some(runtime_manager) = self.runtime_manager() {
+            runtime_manager
+                .note_foreground_thread_create_pending(
+                    &self.entry,
+                    "codex",
+                    timeout_duration.as_millis() as u64,
+                )
+                .await;
+        }
+    }
+
     pub(crate) async fn clear_codex_foreground_work(
         &self,
         thread_id: Option<&str>,
@@ -518,12 +534,7 @@ impl WorkspaceSession {
     ) {
         if let Some(runtime_manager) = self.runtime_manager() {
             runtime_manager
-                .clear_foreground_work_continuity(
-                    "codex",
-                    &self.entry.id,
-                    thread_id,
-                    turn_id,
-                )
+                .clear_foreground_work_continuity("codex", &self.entry.id, thread_id, turn_id)
                 .await;
         }
     }
@@ -542,7 +553,8 @@ impl WorkspaceSession {
             .map(|state| {
                 if let Some(expected_turn_id) = state.turn_id.as_deref() {
                     if let Some(candidate_turn_id) = turn_id.map(str::trim) {
-                        return candidate_turn_id.is_empty() || candidate_turn_id == expected_turn_id;
+                        return candidate_turn_id.is_empty()
+                            || candidate_turn_id == expected_turn_id;
                     }
                 }
                 true
@@ -568,7 +580,10 @@ impl WorkspaceSession {
             .filter(|value| !value.is_empty());
         let timeout_ms = resolve_resume_after_user_input_timeout_ms();
         let state = ResumePendingTurnState {
-            nonce: format!("resume-pending-{}", self.next_id.fetch_add(1, Ordering::SeqCst)),
+            nonce: format!(
+                "resume-pending-{}",
+                self.next_id.fetch_add(1, Ordering::SeqCst)
+            ),
             turn_id: normalized_turn_id.clone(),
             started_at_ms: now_millis(),
             timeout_ms,

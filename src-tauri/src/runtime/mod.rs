@@ -25,6 +25,7 @@ pub(crate) const RUNTIME_RECOVERY_MAX_CONSECUTIVE_FAILURES: u8 = 3;
 pub(crate) const RUNTIME_RECOVERY_RETRY_BACKOFF_MILLIS: u64 = 250;
 pub(crate) const RUNTIME_RECOVERY_QUARANTINE_MILLIS: u64 = 15_000;
 const RUNTIME_CHURN_WINDOW_MILLIS: u64 = 30_000;
+const THREAD_CREATE_PENDING_SENTINEL: &str = "__thread-create-pending__";
 
 fn now_millis() -> u64 {
     SystemTime::now()
@@ -43,7 +44,12 @@ fn write_json_atomically(path: &Path, content: &str) -> Result<(), String> {
     let filename = path
         .file_name()
         .and_then(|value| value.to_str())
-        .ok_or_else(|| format!("runtime ledger path has invalid filename: {}", path.display()))?;
+        .ok_or_else(|| {
+            format!(
+                "runtime ledger path has invalid filename: {}",
+                path.display()
+            )
+        })?;
     let temp_path = parent.join(format!(".{filename}.{}.tmp", uuid::Uuid::new_v4()));
     let mut temp_file = fs::OpenOptions::new()
         .create_new(true)
@@ -480,7 +486,10 @@ impl RuntimeEntry {
 
     fn recent_event_count(events: &VecDeque<u64>) -> u32 {
         let cutoff = now_millis().saturating_sub(RUNTIME_CHURN_WINDOW_MILLIS);
-        events.iter().filter(|timestamp| **timestamp >= cutoff).count() as u32
+        events
+            .iter()
+            .filter(|timestamp| **timestamp >= cutoff)
+            .count() as u32
     }
 
     fn record_spawn_event(&mut self) {
@@ -524,10 +533,13 @@ impl RuntimeEntry {
             (true, true) => Some("turn+stream".to_string()),
             (true, false) => Some("turn".to_string()),
             (false, true) => Some("stream".to_string()),
-            (false, false) => self.foreground_work_state.as_ref().map(|state| match state {
-                RuntimeForegroundWorkState::StartupPending => "startup-pending".to_string(),
-                RuntimeForegroundWorkState::ResumePending => "resume-pending".to_string(),
-            }),
+            (false, false) => self
+                .foreground_work_state
+                .as_ref()
+                .map(|state| match state {
+                    RuntimeForegroundWorkState::StartupPending => "startup-pending".to_string(),
+                    RuntimeForegroundWorkState::ResumePending => "resume-pending".to_string(),
+                }),
         }
     }
 
@@ -1044,7 +1056,8 @@ impl RuntimeManager {
                 return Err(error);
             }
         } else {
-            self.reset_recovery_cycle(engine, workspace_id, source).await;
+            self.reset_recovery_cycle(engine, workspace_id, source)
+                .await;
         }
         match self.begin_runtime_acquire(engine, workspace_id).await {
             RuntimeAcquireGate::Leader(token) => {
@@ -1193,12 +1206,7 @@ impl RuntimeManager {
             .or_insert_with(|| RuntimeEntry::from_workspace(entry, engine))
     }
 
-    pub(crate) async fn record_starting(
-        &self,
-        entry: &WorkspaceEntry,
-        engine: &str,
-        source: &str,
-    ) {
+    pub(crate) async fn record_starting(&self, entry: &WorkspaceEntry, engine: &str, source: &str) {
         let mut entries = self.entries.lock().await;
         let runtime = Self::upsert_entry(&mut entries, entry, engine);
         runtime.update_workspace(entry, engine);
@@ -1534,6 +1542,27 @@ impl RuntimeManager {
         drop(entries);
         let _ = self.persist_ledger().await;
     }
+
+    pub(crate) async fn note_foreground_thread_create_pending(
+        &self,
+        entry: &WorkspaceEntry,
+        engine: &str,
+        timeout_ms: u64,
+    ) {
+        let mut entries = self.entries.lock().await;
+        let runtime = Self::upsert_entry(&mut entries, entry, engine);
+        runtime.update_workspace(entry, engine);
+        runtime.set_foreground_work_continuity(
+            RuntimeForegroundWorkState::StartupPending,
+            THREAD_CREATE_PENDING_SENTINEL,
+            None,
+            timeout_ms,
+        );
+        runtime.last_used_at_ms = now_millis();
+        drop(entries);
+        let _ = self.persist_ledger().await;
+    }
+
     pub(crate) async fn note_foreground_resume_pending(
         &self,
         entry: &WorkspaceEntry,
@@ -1815,7 +1844,7 @@ impl RuntimeManager {
         let mut idle_codex = entries
             .values()
             .filter(|entry| {
-                    entry.engine == "codex"
+                entry.engine == "codex"
                     && entry.session_exists
                     && !entry.stopping
                     && entry.error.is_none()
@@ -2085,7 +2114,11 @@ pub(crate) async fn run_reconcile_cycle(state: &AppState, settings: &AppSettings
             state.runtime_manager.note_coordinator_abort().await;
             continue;
         }
-        let _ = close_runtime(state, &candidate.engine, &candidate.workspace_id).await;
+        let _ = if candidate.reason == "manual-release" {
+            close_runtime(state, &candidate.engine, &candidate.workspace_id).await
+        } else {
+            evict_runtime(state, &candidate.engine, &candidate.workspace_id).await
+        };
         log::info!(
             "[runtime] evicted engine={} workspace_id={} reason={}",
             candidate.engine,
@@ -2212,6 +2245,13 @@ async fn close_runtime(state: &AppState, engine: &str, workspace_id: &str) -> Re
     }
 }
 
+async fn evict_runtime(state: &AppState, engine: &str, workspace_id: &str) -> Result<(), String> {
+    match engine {
+        "claude" => stop_claude_workspace_session(state, workspace_id).await,
+        _ => evict_workspace_session(&state.sessions, &state.runtime_manager, workspace_id).await,
+    }
+}
+
 async fn stop_claude_workspace_session(state: &AppState, workspace_id: &str) -> Result<(), String> {
     state
         .runtime_manager
@@ -2284,8 +2324,25 @@ pub(crate) async fn terminate_workspace_session(
     session: Arc<WorkspaceSession>,
     runtime_manager: Option<&RuntimeManager>,
 ) -> Result<(), String> {
+    terminate_workspace_session_with_shutdown_mode(session, runtime_manager, true).await
+}
+
+async fn terminate_workspace_session_for_eviction(
+    session: Arc<WorkspaceSession>,
+    runtime_manager: Option<&RuntimeManager>,
+) -> Result<(), String> {
+    terminate_workspace_session_with_shutdown_mode(session, runtime_manager, false).await
+}
+
+async fn terminate_workspace_session_with_shutdown_mode(
+    session: Arc<WorkspaceSession>,
+    runtime_manager: Option<&RuntimeManager>,
+    manual_shutdown: bool,
+) -> Result<(), String> {
     let workspace_id = session.entry.id.clone();
-    session.mark_manual_shutdown();
+    if manual_shutdown {
+        session.mark_manual_shutdown();
+    }
     if let Some(runtime_manager) = runtime_manager {
         runtime_manager
             .record_stopping("codex", &workspace_id)
@@ -2383,9 +2440,9 @@ pub(crate) async fn replace_workspace_session(
         new_session,
         lease_source,
         |session, runtime_manager| {
-            Box::pin(async move {
-                terminate_replaced_workspace_session(session, runtime_manager).await
-            })
+            Box::pin(
+                async move { terminate_replaced_workspace_session(session, runtime_manager).await },
+            )
         },
     )
     .await
@@ -2403,10 +2460,9 @@ where
     Terminator: for<'a> FnOnce(
             Arc<WorkspaceSession>,
             Option<&'a RuntimeManager>,
-        )
-            -> std::pin::Pin<
-                Box<dyn std::future::Future<Output = Result<(), String>> + Send + 'a>,
-            > + Send,
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<(), String>> + Send + 'a>,
+        > + Send,
 {
     let replacement_token = if let Some(runtime_manager) = runtime_manager {
         match runtime_manager
@@ -2501,6 +2557,20 @@ pub(crate) async fn stop_workspace_session(
     let session = sessions.lock().await.remove(workspace_id);
     if let Some(session) = session {
         terminate_workspace_session(session, Some(runtime_manager)).await?;
+    } else {
+        runtime_manager.record_removed("codex", workspace_id).await;
+    }
+    Ok(())
+}
+
+async fn evict_workspace_session(
+    sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
+    runtime_manager: &RuntimeManager,
+    workspace_id: &str,
+) -> Result<(), String> {
+    let session = sessions.lock().await.remove(workspace_id);
+    if let Some(session) = session {
+        terminate_workspace_session_for_eviction(session, Some(runtime_manager)).await?;
     } else {
         runtime_manager.record_removed("codex", workspace_id).await;
     }

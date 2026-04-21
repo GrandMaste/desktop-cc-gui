@@ -43,10 +43,10 @@ export function RuntimeReconnectCard({
     !retryMessage ||
     (!retryMessage.text.trim() && (retryMessage.images?.length ?? 0) === 0);
   const reconnectUnavailable = requiresThreadRecovery
-    ? !workspaceId || !threadId || !onRecoverThreadRuntimeAndResend
+    ? !workspaceId || !threadId || !onRecoverThreadRuntime
     : !workspaceId;
   const resendUnavailable = requiresThreadRecovery
-    ? reconnectUnavailable || retryMessageUnavailable
+    ? !workspaceId || !threadId || !onRecoverThreadRuntimeAndResend || retryMessageUnavailable
     : reconnectUnavailable ||
       retryMessageUnavailable ||
       !threadId ||
@@ -184,6 +184,8 @@ export function RuntimeReconnectCard({
     : requiresThreadRecovery
       ? t("messages.threadRecoveryResendAction")
       : t("messages.runtimeReconnectResendAction");
+  const showReconnectAction = !requiresThreadRecovery || Boolean(onRecoverThreadRuntime);
+  const showReconnectUnavailable = showReconnectAction && reconnectUnavailable;
   const unavailableLabel = requiresThreadRecovery
     ? t("messages.threadRecoveryUnavailable")
     : t("messages.runtimeReconnectUnavailable");
@@ -200,7 +202,7 @@ export function RuntimeReconnectCard({
           <div className="message-runtime-recovery-description">{description}</div>
         </div>
         <div className="message-runtime-recovery-actions">
-          {!requiresThreadRecovery ? (
+          {showReconnectAction ? (
             <Button
               type="button"
               size="sm"
@@ -228,7 +230,7 @@ export function RuntimeReconnectCard({
         </div>
       </div>
       <div className="message-runtime-recovery-detail">{hint.rawMessage}</div>
-      {reconnectUnavailable ? (
+      {showReconnectUnavailable ? (
         <div className="message-runtime-recovery-status is-error" aria-live="polite">
           {unavailableLabel}
         </div>

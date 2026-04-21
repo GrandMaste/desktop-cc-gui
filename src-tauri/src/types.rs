@@ -1292,6 +1292,12 @@ impl AppSettings {
         self.codex_max_warm_runtimes = self.codex_max_warm_runtimes.clamp(0, 16);
         self.codex_warm_ttl_seconds = self.codex_warm_ttl_seconds.clamp(15, 14400);
     }
+
+    pub(crate) fn upgrade_runtime_pool_settings_for_startup(&mut self) {
+        self.sanitize_runtime_pool_settings();
+        self.codex_warm_ttl_seconds =
+            self.codex_warm_ttl_seconds.max(default_codex_warm_ttl_seconds());
+    }
 }
 
 impl Default for AppSettings {
@@ -1596,6 +1602,16 @@ mod tests {
         assert_eq!(settings.codex_max_hot_runtimes, 8);
         assert_eq!(settings.codex_max_warm_runtimes, 16);
         assert_eq!(settings.codex_warm_ttl_seconds, 14_400);
+    }
+
+    #[test]
+    fn app_settings_upgrade_runtime_pool_settings_for_startup_raises_legacy_warm_ttl() {
+        let mut settings = AppSettings::default();
+        settings.codex_warm_ttl_seconds = 300;
+
+        settings.upgrade_runtime_pool_settings_for_startup();
+
+        assert_eq!(settings.codex_warm_ttl_seconds, 7200);
     }
 
     #[test]

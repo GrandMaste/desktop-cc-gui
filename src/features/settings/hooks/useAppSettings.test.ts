@@ -64,6 +64,18 @@ describe("useAppSettings", () => {
     expect(result.current.settings.remoteBackendHost).toBe("example:1234");
   });
 
+  it("upgrades legacy warm ttl to the current startup default when loading", async () => {
+    getAppSettingsMock.mockResolvedValue({
+      codexWarmTtlSeconds: 300,
+    } as AppSettings);
+
+    const { result } = renderHook(() => useAppSettings());
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    expect(result.current.settings.codexWarmTtlSeconds).toBe(7200);
+  });
+
   it("keeps defaults when getAppSettings fails", async () => {
     getAppSettingsMock.mockRejectedValue(new Error("boom"));
 

@@ -27,7 +27,12 @@ async fn recovery_guard_quarantines_after_repeated_failures() {
 
     for attempt in 1..RUNTIME_RECOVERY_MAX_CONSECUTIVE_FAILURES {
         let quarantined = manager
-            .record_recovery_failure("codex", "ws-1", "thread-list-live", &format!("boom-{attempt}"))
+            .record_recovery_failure(
+                "codex",
+                "ws-1",
+                "thread-list-live",
+                &format!("boom-{attempt}"),
+            )
             .await;
         assert!(quarantined.is_none());
     }
@@ -186,7 +191,10 @@ async fn startup_probe_failure_stays_distinct_from_post_ready_stale() {
 
     assert_eq!(row.startup_state, Some(RuntimeStartupState::Starting));
     assert_eq!(row.last_guard_state.as_deref(), Some("probe-failed"));
-    assert_eq!(row.last_probe_failure.as_deref(), Some("startup probe timeout"));
+    assert_eq!(
+        row.last_probe_failure.as_deref(),
+        Some("startup probe timeout")
+    );
     assert_eq!(
         row.last_probe_failure_source.as_deref(),
         Some("thread-list-live"),

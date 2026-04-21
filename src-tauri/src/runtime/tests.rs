@@ -1,19 +1,19 @@
 use super::{
-    ProcessSnapshotRow, RuntimeEndedRecord, RuntimeEngineObservability, RuntimeManager,
-    RuntimeProcessDiagnostics, RuntimeState, build_engine_observability,
-    is_engine_root_process, parse_process_rows_unix_output, parse_process_rows_windows_payload,
-    replace_workspace_session_with_terminator, terminate_replaced_workspace_session,
-    write_json_atomically,
+    build_engine_observability, is_engine_root_process, parse_process_rows_unix_output,
+    parse_process_rows_windows_payload, replace_workspace_session_with_terminator,
+    terminate_replaced_workspace_session, write_json_atomically, ProcessSnapshotRow,
+    RuntimeEndedRecord, RuntimeEngineObservability, RuntimeManager, RuntimeProcessDiagnostics,
+    RuntimeState,
 };
 use crate::backend::app_server::{
-    WorkspaceSession, dispose_test_workspace_session, make_test_workspace_session,
+    dispose_test_workspace_session, make_test_workspace_session, WorkspaceSession,
 };
 use crate::types::{AppSettings, WorkspaceEntry, WorkspaceKind, WorkspaceSettings};
 use serde_json::json;
 use std::collections::HashMap;
 use std::fs;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{Mutex, Notify};
 use uuid::Uuid;
@@ -54,6 +54,36 @@ async fn reconcile_never_marks_leased_runtime_evictable() {
     assert!(candidates.is_empty());
     let snapshot = manager.snapshot(&settings).await;
     assert!(matches!(snapshot.rows[0].state, RuntimeState::Acquired));
+    assert!(snapshot.rows[0].active_work_protected);
+}
+
+#[tokio::test]
+async fn reconcile_never_marks_thread_create_pending_runtime_evictable() {
+    let manager = RuntimeManager::new(&std::env::temp_dir());
+    let entry = workspace_entry("thread-create-pending");
+    manager.record_starting(&entry, "codex", "test").await;
+    {
+        let mut entries = manager.entries.lock().await;
+        let runtime = entries
+            .get_mut("codex::thread-create-pending")
+            .expect("runtime entry should exist");
+        runtime.session_exists = true;
+        runtime.starting = false;
+        runtime.last_used_at_ms = 0;
+    }
+    manager
+        .note_foreground_thread_create_pending(&entry, "codex", 30_000)
+        .await;
+    let mut settings = AppSettings::default();
+    settings.codex_warm_ttl_seconds = 1;
+    let candidates = manager.reconcile_pool(&settings).await;
+    assert!(candidates.is_empty());
+    let snapshot = manager.snapshot(&settings).await;
+    assert!(matches!(
+        snapshot.rows[0].state,
+        RuntimeState::StartupPending
+    ));
+    assert!(snapshot.rows[0].active_work_protected);
 }
 
 #[tokio::test]
@@ -97,7 +127,9 @@ async fn record_runtime_ended_clears_leases_and_persists_exit_diagnostics() {
     let entry = workspace_entry("ended");
     manager.record_starting(&entry, "codex", "test").await;
     manager.acquire_turn_lease(&entry, "codex", "turn:a").await;
-    manager.acquire_stream_lease(&entry, "codex", "stream:a").await;
+    manager
+        .acquire_stream_lease(&entry, "codex", "stream:a")
+        .await;
     {
         let mut entries = manager.entries.lock().await;
         let runtime = entries
@@ -417,7 +449,11 @@ fn codex_root_detector_ignores_vendor_child() {
         .collect::<std::collections::HashMap<_, _>>();
 
     assert!(is_engine_root_process("codex", &root, &rows_by_pid));
-    assert!(!is_engine_root_process("codex", &vendor_child, &rows_by_pid));
+    assert!(!is_engine_root_process(
+        "codex",
+        &vendor_child,
+        &rows_by_pid
+    ));
 }
 
 #[test]

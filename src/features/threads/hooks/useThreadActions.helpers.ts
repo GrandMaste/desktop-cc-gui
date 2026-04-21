@@ -143,6 +143,49 @@ export function selectReplacementThreadSummary(params: {
   return null;
 }
 
+export function selectRecoveredNewThreadSummary(params: {
+  staleThreadId: string;
+  previousSummaries: ThreadSummary[];
+  summaries: ThreadSummary[];
+  staleSummary?: ThreadSummary;
+}): ThreadSummary | null {
+  const candidates = listReplacementThreadCandidates(params);
+  if (candidates.length === 0) {
+    return null;
+  }
+
+  const previousIds = new Set(
+    params.previousSummaries
+      .map((entry) => entry.id.trim())
+      .filter(Boolean),
+  );
+  const newlyDiscoveredCandidates = candidates.filter(
+    (entry) => !previousIds.has(entry.id.trim()),
+  );
+  if (newlyDiscoveredCandidates.length === 1) {
+    return newlyDiscoveredCandidates[0] ?? null;
+  }
+
+  const staleUpdatedAt =
+    typeof params.staleSummary?.updatedAt === "number" &&
+    Number.isFinite(params.staleSummary.updatedAt)
+      ? params.staleSummary.updatedAt
+      : 0;
+  if (staleUpdatedAt > 0) {
+    const strictlyNewerCandidates = candidates.filter(
+      (entry) =>
+        typeof entry.updatedAt === "number" &&
+        Number.isFinite(entry.updatedAt) &&
+        entry.updatedAt > staleUpdatedAt,
+    );
+    if (strictlyNewerCandidates.length === 1) {
+      return strictlyNewerCandidates[0] ?? null;
+    }
+  }
+
+  return null;
+}
+
 function scoreReplacementThreadCandidate(
   entry: ThreadSummary,
   staleSummary?: ThreadSummary,

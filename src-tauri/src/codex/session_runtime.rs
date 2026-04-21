@@ -77,6 +77,16 @@ pub(crate) async fn ensure_codex_session(
     state: &AppState,
     app: &AppHandle,
 ) -> Result<(), String> {
+    ensure_codex_session_with_mode(workspace_id, state, app, false, "ensure-runtime-ready").await
+}
+
+async fn ensure_codex_session_with_mode(
+    workspace_id: &str,
+    state: &AppState,
+    app: &AppHandle,
+    automatic_recovery: bool,
+    recovery_source: &str,
+) -> Result<(), String> {
     loop {
         let existing_session = {
             let sessions = state.sessions.lock().await;
@@ -89,7 +99,7 @@ pub(crate) async fn ensure_codex_session(
                 || async {
                     state
                         .runtime_manager
-                        .touch("codex", workspace_id, "ensure-runtime-ready")
+                        .touch("codex", workspace_id, recovery_source)
                         .await;
                 },
                 || async {
@@ -114,21 +124,23 @@ pub(crate) async fn ensure_codex_session(
                 .note_probe_failure(
                     "codex",
                     workspace_id,
-                    "ensure-runtime-ready",
+                    recovery_source,
                     "stale existing session failed health probe",
                 )
                 .await;
-            if let Err(quarantine_error) = state
-                .runtime_manager
-                .record_recovery_failure_with_backoff(
-                    "codex",
-                    workspace_id,
-                    "ensure-runtime-ready",
-                    "stale existing session failed health probe",
-                )
-                .await
-            {
-                return Err(quarantine_error);
+            if automatic_recovery {
+                if let Err(quarantine_error) = state
+                    .runtime_manager
+                    .record_recovery_failure_with_backoff(
+                        "codex",
+                        workspace_id,
+                        recovery_source,
+                        "stale existing session failed health probe",
+                    )
+                    .await
+                {
+                    return Err(quarantine_error);
+                }
             }
             continue;
         }
@@ -138,8 +150,8 @@ pub(crate) async fn ensure_codex_session(
             .begin_runtime_acquire_or_retry(
                 "codex",
                 workspace_id,
-                "ensure-runtime-ready",
-                true,
+                recovery_source,
+                automatic_recovery,
                 "timed out waiting for concurrent runtime acquire",
             )
             .await
@@ -177,7 +189,7 @@ pub(crate) async fn ensure_codex_session(
 
         state
             .runtime_manager
-            .record_starting(&entry, "codex", "ensure-runtime-ready")
+            .record_starting(&entry, "codex", recovery_source)
             .await;
 
         let spawn_result = spawn_workspace_session(
@@ -193,25 +205,28 @@ pub(crate) async fn ensure_codex_session(
             Err(error) => {
                 state
                     .runtime_manager
-                    .record_failure(&entry, "codex", "ensure-runtime-ready", error.clone())
+                    .record_failure(&entry, "codex", recovery_source, error.clone())
                     .await;
                 state
                     .runtime_manager
                     .finish_runtime_acquire(&acquire_token)
                     .await;
-                if let Err(quarantine_error) = state
-                    .runtime_manager
-                    .record_recovery_failure_with_backoff(
-                        "codex",
-                        workspace_id,
-                        "ensure-runtime-ready",
-                        error.as_str(),
-                    )
-                    .await
-                {
-                    return Err(quarantine_error);
+                if automatic_recovery {
+                    if let Err(quarantine_error) = state
+                        .runtime_manager
+                        .record_recovery_failure_with_backoff(
+                            "codex",
+                            workspace_id,
+                            recovery_source,
+                            error.as_str(),
+                        )
+                        .await
+                    {
+                        return Err(quarantine_error);
+                    }
+                    continue;
                 }
-                continue;
+                return Err(error);
             }
         };
         session.set_mode_enforcement_enabled(mode_enforcement_enabled);
@@ -221,7 +236,7 @@ pub(crate) async fn ensure_codex_session(
             Some(&state.runtime_manager),
             entry.id,
             session,
-            "ensure-runtime-ready",
+            recovery_source,
         )
         .await;
         state
@@ -236,18 +251,22 @@ pub(crate) async fn ensure_codex_session(
             return replace_result;
         }
         if let Err(error) = &replace_result {
-            if let Err(quarantine_error) = state
-                .runtime_manager
-                .record_recovery_failure_with_backoff(
-                    "codex",
-                    workspace_id,
-                    "ensure-runtime-ready",
-                    error.as_str(),
-                )
-                .await
-            {
-                return Err(quarantine_error);
+            if automatic_recovery {
+                if let Err(quarantine_error) = state
+                    .runtime_manager
+                    .record_recovery_failure_with_backoff(
+                        "codex",
+                        workspace_id,
+                        recovery_source,
+                        error.as_str(),
+                    )
+                    .await
+                {
+                    return Err(quarantine_error);
+                }
+                continue;
             }
+            return replace_result;
         }
     }
 }

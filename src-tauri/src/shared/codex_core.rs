@@ -367,6 +367,7 @@ pub(crate) async fn start_thread_core(
     model: Option<String>,
 ) -> Result<Value, String> {
     let session = get_session_clone(sessions, &workspace_id).await?;
+    let timeout_duration = session.default_request_timeout();
     let mut params = Map::new();
     params.insert("cwd".to_string(), json!(session.entry.path));
     params.insert("approvalPolicy".to_string(), json!("on-request"));
@@ -377,8 +378,21 @@ pub(crate) async fn start_thread_core(
         params.insert("model".to_string(), json!(model));
     }
     session
-        .send_request("thread/start", Value::Object(params))
+        .note_codex_thread_create_pending(timeout_duration)
+        .await;
+    match session
+        .send_request_with_timeout("thread/start", Value::Object(params), timeout_duration)
         .await
+    {
+        Ok(response) => {
+            session.clear_codex_foreground_work(None, None).await;
+            Ok(response)
+        }
+        Err(error) => {
+            session.clear_codex_foreground_work(None, None).await;
+            Err(error)
+        }
+    }
 }
 
 pub(crate) async fn resume_thread_core(

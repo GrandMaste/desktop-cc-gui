@@ -97,6 +97,7 @@ import {
   resolveThreadSourceMeta,
   restoreThreadParentLinksFromSnapshot,
   listReplacementThreadCandidates,
+  selectRecoveredNewThreadSummary,
   selectReplacementThreadByMessageHistory,
   selectReplacementThreadSummary,
   shouldIncludeWorkspaceThreadEntry,
@@ -195,7 +196,11 @@ export function useThreadActions({
   const geminiRefreshAttemptedRef = useRef<Record<string, boolean>>({});
   const threadListRequestSeqRef = useRef<Record<string, number>>({});
   const claudeRewindInFlightByThreadRef = useRef<Record<string, boolean>>({});
+  const previousThreadsByWorkspaceRef = useRef(threadsByWorkspace);
   const latestThreadsByWorkspaceRef = useRef(threadsByWorkspace);
+  if (latestThreadsByWorkspaceRef.current !== threadsByWorkspace) {
+    previousThreadsByWorkspaceRef.current = latestThreadsByWorkspaceRef.current;
+  }
   latestThreadsByWorkspaceRef.current = threadsByWorkspace;
   const listWorkspaceSessionsService = Object.prototype.hasOwnProperty.call(
     tauriServices,
@@ -693,13 +698,31 @@ export function useThreadActions({
             latestThreadsByWorkspaceRef.current[workspaceId] ??
             threadsByWorkspace[workspaceId] ??
             [];
+          const recoveryBaselineSummaries =
+            previousThreadsByWorkspaceRef.current[workspaceId] ??
+            threadsByWorkspace[workspaceId] ??
+            [];
           const staleSummary =
             existingSummaries.find((entry) => entry.id === threadId) ??
             (threadsByWorkspace[workspaceId] ?? []).find(
               (entry) => entry.id === threadId,
             );
           const engineSource = inferThreadEngineSource(threadId, staleSummary);
+          const fallbackStaleActivityAt =
+            (threadActivityRef.current[workspaceId] ?? {})[threadId] ?? 0;
+          const effectiveStaleSummary =
+            staleSummary ??
+            (fallbackStaleActivityAt > 0
+              ? {
+                  id: threadId,
+                  name: getCustomName(workspaceId, threadId) ?? "",
+                  updatedAt: fallbackStaleActivityAt,
+                  engineSource,
+                  threadKind: "native",
+                }
+              : undefined);
           let nextSummaries = existingSummaries;
+          let directRecoveredSummaryMatch: ThreadSummary | null = null;
           if (engineSource === "codex") {
             const workspacePath = normalizeComparableWorkspacePath(
               workspacePathsByIdRef.current[workspaceId] ?? "",
@@ -740,7 +763,7 @@ export function useThreadActions({
                   (result.nextCursor ?? result.next_cursor ?? null) as string | null;
                 const replacementCandidate = selectReplacementThreadSummary({
                   staleThreadId: threadId,
-                  staleSummary,
+                  staleSummary: effectiveStaleSummary,
                   summaries: mergeRecoveredThreadSummaries(
                     existingSummaries,
                     matchingThreads
@@ -798,6 +821,12 @@ export function useThreadActions({
                   } satisfies ThreadSummary;
                 })
                 .filter((entry) => entry.id);
+              directRecoveredSummaryMatch = selectRecoveredNewThreadSummary({
+                staleThreadId: threadId,
+                previousSummaries: recoveryBaselineSummaries,
+                summaries: refreshedCodexSummaries,
+                staleSummary: effectiveStaleSummary,
+              });
               nextSummaries = mergeRecoveredThreadSummaries(
                 existingSummaries,
                 refreshedCodexSummaries,
@@ -847,10 +876,22 @@ export function useThreadActions({
           const summaryMatch = selectReplacementThreadSummary({
             staleThreadId: threadId,
             summaries: nextSummaries,
-            staleSummary,
+            staleSummary: effectiveStaleSummary,
           });
           if (summaryMatch) {
             return { threadId: summaryMatch.id };
+          }
+          const newlyRecoveredMatch = selectRecoveredNewThreadSummary({
+            staleThreadId: threadId,
+            previousSummaries: recoveryBaselineSummaries,
+            summaries: nextSummaries,
+            staleSummary: effectiveStaleSummary,
+          });
+          if (newlyRecoveredMatch) {
+            return { threadId: newlyRecoveredMatch.id };
+          }
+          if (directRecoveredSummaryMatch) {
+            return { threadId: directRecoveredSummaryMatch.id };
           }
 
           const staleItems = itemsByThread[threadId] ?? [];

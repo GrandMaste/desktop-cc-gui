@@ -991,6 +991,122 @@ describe("useThreadActions", () => {
     });
   });
 
+  it("recovers stale unified codex threads by a sole newly discovered replacement thread when local history is insufficient", async () => {
+    vi.mocked(resumeThread).mockImplementation(
+      async (_workspaceId: string, threadId: string) => {
+        if (threadId === "thread-stale") {
+          throw new Error("thread not found: thread-stale");
+        }
+        return {
+          result: {
+            thread: {
+              id: threadId,
+              turns: [{ id: `turn-${threadId}`, items: [] }],
+            },
+          },
+        };
+      },
+    );
+    vi.mocked(listThreads).mockResolvedValue({
+      result: {
+        data: [
+          {
+            id: "thread-recovered",
+            preview: "1",
+            updatedAt: 105,
+            updated_at: 105,
+            cwd: "/tmp/codex",
+          },
+          {
+            id: "thread-known",
+            preview: "1",
+            updatedAt: 90,
+            updated_at: 90,
+            cwd: "/tmp/codex",
+          },
+        ],
+        nextCursor: null,
+      },
+    });
+    vi.mocked(loadCodexSession).mockResolvedValue({ entries: [] });
+    vi.mocked(buildItemsFromThread).mockImplementation((thread) => {
+      const id = (thread as { id?: string }).id;
+      if (id === "thread-recovered") {
+        return [
+          {
+            id: "assistant-recovered",
+            kind: "message",
+            role: "assistant",
+            text: "Recovered",
+          },
+        ];
+      }
+      return [];
+    });
+    const rememberThreadAlias = vi.fn();
+
+    const { result, dispatch } = renderActions({
+      useUnifiedHistoryLoader: true,
+      rememberThreadAlias,
+      threadActivityRef: {
+        current: {
+          "ws-1": {
+            "thread-stale": 100,
+          },
+        },
+      },
+      itemsByThread: {
+        "thread-stale": [
+          {
+            id: "assistant-error",
+            kind: "message",
+            role: "assistant",
+            text: "会话启动失败： thread not found: thread-stale",
+          },
+        ],
+      },
+      threadsByWorkspace: {
+        "ws-1": [
+          {
+            id: "thread-stale",
+            name: "1",
+            updatedAt: 100,
+            engineSource: "codex",
+            threadKind: "native",
+          },
+          {
+            id: "thread-known",
+            name: "1",
+            updatedAt: 90,
+            engineSource: "codex",
+            threadKind: "native",
+          },
+        ],
+      },
+      activeThreadIdByWorkspace: {
+        "ws-1": "thread-stale",
+      },
+    });
+
+    await act(async () => {
+      await result.current.listThreadsForWorkspace(workspace, { preserveState: true });
+    });
+    dispatch.mockClear();
+
+    let resumed: string | null = null;
+    await act(async () => {
+      resumed = await result.current.resumeThreadForWorkspace("ws-1", "thread-stale");
+    });
+
+    expect(resumed).toBe("thread-recovered");
+    expect(rememberThreadAlias).toHaveBeenCalledWith("thread-stale", "thread-recovered");
+    expect(dispatch).toHaveBeenCalledWith({
+      type: "setActiveThreadId",
+      workspaceId: "ws-1",
+      threadId: "thread-recovered",
+    });
+  });
+
   it("ends loading when live thread list times out during a non-preserved refresh", async () => {
     vi.useFakeTimers();
     vi.mocked(listThreads).mockImplementation(
