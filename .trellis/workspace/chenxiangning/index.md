@@ -7,8 +7,8 @@
 ## Current Status
 
 <!-- @@@auto:current-status -->
-- **Active File**: `journal-2.md`
-- **Total Sessions**: 68
+- **Active File**: `journal-3.md`
+- **Total Sessions**: 69
 - **Last Active**: 2026-04-21
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,8 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~1960 | Active |
+| `journal-3.md` | ~72 | Active |
+| `journal-2.md` | ~1960 | Archived |
 | `journal-1.md` | ~1990 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +31,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 69 | 2026-04-21 | 加固 Codex runtime 异常退出恢复链路 | `d34a18547b1b0dd957eeb1dcc2fc94f0c8c85bed` | `feature/f-v0.4.6` |
 | 68 | 2026-04-21 | review: 修复消息实时展示与完成提示音边界问题 | `1b9a4554` | `feature/f-v0.4.6` |
 | 67 | 2026-04-21 | 统一全局 loading 进度处理 | `91edb3e8` | `feature/f-v0.4.6` |
 | 66 | 2026-04-21 | 归档已验证 OpenSpec 提案 | `dae39948` | `feature/f-v0.4.6` |
