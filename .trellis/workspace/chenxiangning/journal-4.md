@@ -1526,3 +1526,59 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 129: 归档 exhaustive-deps 治理 OpenSpec 变更
+
+**Date**: 2026-04-23
+**Task**: 归档 exhaustive-deps 治理 OpenSpec 变更
+**Branch**: `feature/v-0.4.8`
+
+### Summary
+
+(Add summary)
+
+### Main Changes
+
+任务目标:
+- 归档已完成的 exhaustive-deps 治理 OpenSpec changes，并同步主 specs。
+
+主要改动:
+- 归档 change `triage-exhaustive-deps-warning-batches`
+- 归档 change `stabilize-exhaustive-deps-sentinel-patterns`
+- 同步生成主 specs:
+  - openspec/specs/exhaustive-deps-warning-governance/spec.md
+  - openspec/specs/exhaustive-deps-sentinel-pattern-stability/spec.md
+
+涉及模块:
+- openspec/changes/archive/2026-04-22-triage-exhaustive-deps-warning-batches/**
+- openspec/changes/archive/2026-04-22-stabilize-exhaustive-deps-sentinel-patterns/**
+- openspec/specs/exhaustive-deps-warning-governance/spec.md
+- openspec/specs/exhaustive-deps-sentinel-pattern-stability/spec.md
+
+验证结果:
+- openspec archive triage-exhaustive-deps-warning-batches --yes 成功
+- openspec archive stabilize-exhaustive-deps-sentinel-patterns --yes 成功
+- 两个 change 均在 4/4 artifacts complete 后归档
+
+后续事项:
+- 下一轮直接进入 git-history exhaustive-deps hotspot 治理。
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `c9496469` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
