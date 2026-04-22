@@ -333,3 +333,57 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 108: 修复 OpenCode 自动探测抖动
+
+**Date**: 2026-04-22
+**Task**: 修复 OpenCode 自动探测抖动
+**Branch**: `feature/v-0.4.7`
+
+### Summary
+
+(Add summary)
+
+### Main Changes
+
+任务目标：收敛 OpenCode 在 sidebar 菜单打开、菜单常驻与 Claude 模型刷新路径上的自动探测，避免后台反复拉起 opencode CLI 导致 CPU 抖动与菜单长时间停留在检测态。
+
+主要改动：
+- 移除 useSidebarMenus 在菜单打开和 rerender 期间的自动 provider health probe，仅保留用户显式 refresh 时的探测路径。
+- 调整 useEngineController 的刷新策略，新增 engine-scoped model refresh，避免 Claude-only 刷新放大成 all-engine detection。
+- 更新 Sidebar 刷新按钮事件处理，确保手动刷新行为稳定且不会误触菜单关闭。
+- 同步补齐 useSidebarMenus、useEngineController、Sidebar 相关前端回归测试。
+- 新增并同步提交 OpenSpec change：fix-opencode-auto-probe-churn。
+
+涉及模块：
+- src/features/app/hooks/useSidebarMenus.ts
+- src/features/engine/hooks/useEngineController.ts
+- src/features/app/components/Sidebar.tsx
+- src/app-shell.tsx
+- openspec/changes/fix-opencode-auto-probe-churn/
+
+验证结果：
+- 本次回合未额外执行 lint / typecheck / test；提交依据是当前工作区现有实现与测试改动分组结果。
+
+后续事项：
+- 后续可补跑 targeted frontend tests 与质量门禁，确认 manual refresh-only 行为在完整测试矩阵下无回退。
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `f3448982` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
