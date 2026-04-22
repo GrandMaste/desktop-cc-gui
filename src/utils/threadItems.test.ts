@@ -135,6 +135,28 @@ describe("threadItems", () => {
     }
   });
 
+  it("dedupes repeated assistant text that contains multiple inline code spans", () => {
+    const duplicated = [
+      "`computer_use` 修复已提交, commit hash 是 a06c730c。",
+      "我继续补 `journal record`, 然后再提测试和 `changelog`。",
+      "`computer_use` 修复已提交, commit hash 是 a06c730c。",
+      "我继续补 `journal record`, 然后再提测试和 `changelog`。",
+    ].join(" ");
+    const item: ConversationItem = {
+      id: "msg-assistant-inline-code-duplicate-1",
+      kind: "message",
+      role: "assistant",
+      text: duplicated,
+    };
+    const normalized = normalizeItem(item);
+    expect(normalized.kind).toBe("message");
+    if (normalized.kind === "message") {
+      expect(normalized.text).toBe(
+        "`computer_use` 修复已提交, commit hash 是 a06c730c。我继续补 `journal record`, 然后再提测试和 `changelog`。",
+      );
+    }
+  });
+
   it("normalizes assistant no-content placeholders to empty text", () => {
     const item: ConversationItem = {
       id: "msg-assistant-empty-placeholder",

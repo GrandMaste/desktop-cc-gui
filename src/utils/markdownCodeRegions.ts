@@ -52,6 +52,7 @@ function scanInlineCodeState(value: string): InlineCodeInfo {
 function normalizeOutsideInlineCode(
   value: string,
   normalizer: (segment: string) => string,
+  options?: { reuseIdenticalRegions?: boolean },
 ) {
   if (!value.includes("`")) {
     return normalizer(value);
@@ -63,9 +64,18 @@ function normalizeOutsideInlineCode(
   let tokenIndex = 0;
   let placeholderValue = "";
   const protectedRegions: Array<{ token: string; value: string }> = [];
+  const tokenByRegionValue = options?.reuseIdenticalRegions
+    ? new Map<string, string>()
+    : null;
   const usedTokens = new Set<string>();
 
-  const createPlaceholderToken = () => {
+  const createPlaceholderToken = (regionValue: string) => {
+    if (tokenByRegionValue) {
+      const cachedToken = tokenByRegionValue.get(regionValue);
+      if (cachedToken) {
+        return cachedToken;
+      }
+    }
     let suffix = 0;
     let token = `${INLINE_CODE_PLACEHOLDER_PREFIX}${tokenIndex}_${suffix}\u0000`;
     while (value.includes(token) || usedTokens.has(token)) {
@@ -73,6 +83,8 @@ function normalizeOutsideInlineCode(
       token = `${INLINE_CODE_PLACEHOLDER_PREFIX}${tokenIndex}_${suffix}\u0000`;
     }
     usedTokens.add(token);
+    tokenByRegionValue?.set(regionValue, token);
+    tokenIndex += 1;
     return token;
   };
 
@@ -92,20 +104,21 @@ function normalizeOutsideInlineCode(
       continue;
     }
     if (delimiterLength === openDelimiterLength) {
-      const token = createPlaceholderToken();
+      const regionValue = value.slice(protectedStart, cursor);
+      const token = createPlaceholderToken(regionValue);
       placeholderValue += `${value.slice(lastSafeCursor, protectedStart)}${token}`;
-      protectedRegions.push({ token, value: value.slice(protectedStart, cursor) });
+      protectedRegions.push({ token, value: regionValue });
       lastSafeCursor = cursor;
-      tokenIndex += 1;
       protectedStart = -1;
       openDelimiterLength = 0;
     }
   }
 
   if (openDelimiterLength > 0 && protectedStart >= 0) {
-    const token = createPlaceholderToken();
+    const regionValue = value.slice(protectedStart);
+    const token = createPlaceholderToken(regionValue);
     placeholderValue += `${value.slice(lastSafeCursor, protectedStart)}${token}`;
-    protectedRegions.push({ token, value: value.slice(protectedStart) });
+    protectedRegions.push({ token, value: regionValue });
     lastSafeCursor = value.length;
   }
   if (protectedRegions.length === 0) {
@@ -167,6 +180,23 @@ export function normalizeOutsideMarkdownCode(
   value: string,
   normalizer: (segment: string) => string,
 ) {
+  return normalizeOutsideMarkdownCodeWithOptions(value, normalizer);
+}
+
+export function normalizeOutsideMarkdownCodeStableInlineRegions(
+  value: string,
+  normalizer: (segment: string) => string,
+) {
+  return normalizeOutsideMarkdownCodeWithOptions(value, normalizer, {
+    reuseIdenticalRegions: true,
+  });
+}
+
+function normalizeOutsideMarkdownCodeWithOptions(
+  value: string,
+  normalizer: (segment: string) => string,
+  options?: { reuseIdenticalRegions?: boolean },
+) {
   if (!value.includes("```") && !value.includes("~~~") && !value.includes("`")) {
     return normalizer(value);
   }
@@ -184,7 +214,7 @@ export function normalizeOutsideMarkdownCode(
     if (inFence) {
       segments.push(segment);
     } else {
-      const normalized = normalizeOutsideInlineCode(segment, normalizer);
+      const normalized = normalizeOutsideInlineCode(segment, normalizer, options);
       if (normalized !== segment) {
         changed = true;
       }

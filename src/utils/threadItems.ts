@@ -1,5 +1,8 @@
 import type { ConversationItem } from "../types";
-import { normalizeOutsideMarkdownCode } from "./markdownCodeRegions";
+import {
+  normalizeOutsideMarkdownCode,
+  normalizeOutsideMarkdownCodeStableInlineRegions,
+} from "./markdownCodeRegions";
 import { normalizeAgentIcon } from "./agentIcons";
 import {
   formatCollabAgentStates,
@@ -1240,17 +1243,38 @@ function normalizeAssistantMessageText(text: string) {
     return text;
   }
   let normalized = stripClaudeApprovalResumeArtifacts(text);
-  normalized = normalizeOutsideMarkdownCode(normalized, collapseRepeatedAssistantParagraphBlocks);
-  normalized = normalizeOutsideMarkdownCode(normalized, collapseRepeatedAssistantFullText);
+  normalized = normalizeOutsideMarkdownCodeStableInlineRegions(
+    normalized,
+    collapseRepeatedAssistantParagraphBlocks,
+  );
+  normalized = normalizeOutsideMarkdownCodeStableInlineRegions(
+    normalized,
+    collapseRepeatedAssistantFullText,
+  );
   if (isLikelyFragmentedAssistantText(normalized)) {
     normalized = normalizeOutsideMarkdownCode(normalized, normalizeAssistantFragmentedParagraphs);
     normalized = normalizeOutsideMarkdownCode(normalized, normalizeAssistantFragmentedLines);
   }
-  normalized = normalizeOutsideMarkdownCode(normalized, dedupeRepeatedAssistantSentences);
-  normalized = normalizeOutsideMarkdownCode(normalized, collapseNearDuplicateAssistantSentenceBlocks);
-  normalized = normalizeOutsideMarkdownCode(normalized, dedupeAdjacentAssistantParagraphs);
-  normalized = normalizeOutsideMarkdownCode(normalized, collapseRepeatedAssistantParagraphBlocks);
-  normalized = normalizeOutsideMarkdownCode(normalized, collapseRepeatedAssistantFullText);
+  normalized = normalizeOutsideMarkdownCodeStableInlineRegions(
+    normalized,
+    dedupeRepeatedAssistantSentences,
+  );
+  normalized = normalizeOutsideMarkdownCodeStableInlineRegions(
+    normalized,
+    collapseNearDuplicateAssistantSentenceBlocks,
+  );
+  normalized = normalizeOutsideMarkdownCodeStableInlineRegions(
+    normalized,
+    dedupeAdjacentAssistantParagraphs,
+  );
+  normalized = normalizeOutsideMarkdownCodeStableInlineRegions(
+    normalized,
+    collapseRepeatedAssistantParagraphBlocks,
+  );
+  normalized = normalizeOutsideMarkdownCodeStableInlineRegions(
+    normalized,
+    collapseRepeatedAssistantFullText,
+  );
   return normalized.trim();
 }
 
