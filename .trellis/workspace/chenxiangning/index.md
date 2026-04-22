@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-4.md`
-- **Total Sessions**: 117
-- **Last Active**: 2026-04-22
+- **Total Sessions**: 118
+- **Last Active**: 2026-04-23
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-4.md` | ~882 | Active |
+| `journal-4.md` | ~940 | Active |
 | `journal-3.md` | ~1972 | Archived |
 | `journal-2.md` | ~1960 | Archived |
 | `journal-1.md` | ~1990 | Archived |
@@ -32,6 +32,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 118 | 2026-04-23 | Upgrade large-file governance policy | `6b6dc1c9` | `feature/v-0.4.8` |
 | 117 | 2026-04-22 | 同步 OpenSpec 提案并归档已完成变更 | `73b9256c` | `feature/v-0.4.8` |
 | 116 | 2026-04-22 | 补写 v0.4.7 changelog 消息区修复说明 | `042f7853` | `feature/v-0.4.7` |
 | 115 | 2026-04-22 | 修复 codex 最终消息 markdown 结构块重复 | `c3b99dba` | `feature/v-0.4.7` |

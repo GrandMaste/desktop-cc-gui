@@ -880,3 +880,61 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 118: Upgrade large-file governance policy
+
+**Date**: 2026-04-23
+**Task**: Upgrade large-file governance policy
+**Branch**: `feature/v-0.4.8`
+
+### Summary
+
+将大文件治理升级为按域 policy + baseline-aware hard gate。
+
+### Main Changes
+
+任务目标:
+- 将单一 3000 行阈值升级为 domain-aware、baseline-aware 的 large-file governance。
+
+主要改动:
+- 新增 policy 文件与 baseline-aware gate 逻辑。
+- 更新 CI/workflow 与 package scripts。
+- 补齐 playbook、Trellis task 与 OpenSpec change。
+
+涉及模块:
+- scripts/check-large-files.mjs
+- scripts/check-large-files.policy.json
+- scripts/check-large-files.test.mjs
+- .github/workflows/large-file-governance.yml
+- package.json
+- docs/architecture/large-file-governance-playbook.md
+- openspec/changes/upgrade-large-file-governance-policy-v2
+
+验证结果:
+- node --test scripts/check-large-files.test.mjs 通过
+- npm run check:large-files 通过
+- npm run check:large-files:near-threshold 通过
+- npm run check:large-files:gate 通过
+
+后续事项:
+- 基于新 policy 继续分批拆解 retained hard debt 与 near-threshold 热点。
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `6b6dc1c9` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
