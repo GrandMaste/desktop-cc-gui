@@ -271,3 +271,65 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 107: 完成 Computer Use Phase 1 状态桥接实现
+
+**Date**: 2026-04-22
+**Task**: 完成 Computer Use Phase 1 状态桥接实现
+**Branch**: `feature/v-0.4.7`
+
+### Summary
+
+(Add summary)
+
+### Main Changes
+
+## 任务目标
+- 执行 OpenSpec change `add-codex-computer-use-plugin-bridge`
+- 完成 Phase 1 status-only bridge，实现对本机官方 Codex Computer Use 安装状态的只读探测与设置页可见面板
+
+## 主要改动
+- 新增 Rust `src-tauri/src/computer_use/**` 模块，提供 status model、platform dispatch、macOS/Windows adapter 与 `get_computer_use_bridge_status` command
+- 新增前端 `src/features/computer-use/**` feature、`src/services/tauri/computerUse.ts` bridge、`src/types.ts` contract 与 settings surface
+- 修复 `.mcp.json` helper 相对路径解析，按 `descriptor dir + cwd` 解析真实 helper 二进制路径，避免误报 `helper missing`
+- 同步 OpenSpec artifacts 与 `.trellis/spec/backend|frontend/computer-use-bridge.md` code-spec 契约
+- 补充 blocked / unsupported UI 与 helper path regression tests
+
+## 涉及模块
+- backend: `src-tauri/src/computer_use/**`, `src-tauri/src/command_registry.rs`, `src-tauri/src/lib.rs`
+- frontend: `src/features/computer-use/**`, `src/services/tauri.ts`, `src/services/tauri.test.ts`, `src/services/tauri/computerUse.ts`, `src/types.ts`
+- settings/i18n: `src/features/settings/components/settings-view/sections/CodexSection.tsx`, `src/features/settings/components/settings-view/settingsViewConstants.ts`, `src/i18n/locales/en.part1.ts`, `src/i18n/locales/zh.part1.ts`
+- specs: `openspec/changes/add-codex-computer-use-plugin-bridge/**`, `.trellis/spec/backend/computer-use-bridge.md`, `.trellis/spec/frontend/computer-use-bridge.md`
+
+## 验证结果
+- `npm run lint` 通过（仅有现存 warning）
+- `npm run typecheck` 通过
+- `npm run test` 通过
+- `cargo test --manifest-path src-tauri/Cargo.toml` 通过
+- `cargo test --manifest-path src-tauri/Cargo.toml computer_use -- --nocapture` 通过
+- `npx vitest run src/features/computer-use/components/ComputerUseStatusCard.test.tsx` 通过
+- `macOS` 实机验证：状态为预期内的 `blocked`，helper 路径解析正确
+
+## 后续事项
+- `E.3` 仍保留 1 个 blocker：缺少 Windows 真机 `unsupported` 验证
+- 工作区仍存在与本次提交无关的未提交改动，后续需要分开处理
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `7cbf1f60` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
