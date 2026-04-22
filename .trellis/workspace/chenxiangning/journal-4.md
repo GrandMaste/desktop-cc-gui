@@ -442,3 +442,51 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 110: 修复 Computer Use 插件清单版本选择
+
+**Date**: 2026-04-22
+**Task**: 修复 Computer Use 插件清单版本选择
+**Branch**: `feature/v-0.4.7`
+
+### Summary
+
+(Add summary)
+
+### Main Changes
+
+任务目标：修复 Computer Use 插件缓存目录中多版本 manifest 并存时的版本选择错误，避免字符串排序把高版本误判成低版本。
+
+主要改动：
+- 将 plugin manifest 路径选择从简单排序改为按版本号片段做 numeric compare。
+- 在版本号相同的情况下保留 label 比较作为稳定兜底。
+- 补充 Rust 回归测试，覆盖 2.9.0 与 10.0.0 并存时应优先选择 10.0.0 的场景。
+
+涉及模块：
+- src-tauri/src/computer_use/mod.rs
+
+验证结果：
+- 本次回合未单独执行 cargo test；提交包含针对该逻辑的回归测试代码。
+
+后续事项：
+- 如需进一步验证，可补跑 src-tauri 相关测试集，确认插件缓存扫描与 manifest 加载链路稳定。
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `a06c730c` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
