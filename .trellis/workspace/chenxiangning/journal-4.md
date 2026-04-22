@@ -1173,3 +1173,66 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 123: Split git branch commands and refresh baseline
+
+**Date**: 2026-04-23
+**Task**: Split git branch commands and refresh baseline
+**Branch**: `feature/v-0.4.8`
+
+### Summary
+
+(Add summary)
+
+### Main Changes
+
+任务目标:
+- 清理 git/commands.rs hard debt
+- 将 branch lifecycle 与 branch compare 子域抽到独立 command 子模块
+- 刷新 large-file baseline/watchlist，确认当前 hard debt 只剩 engine/commands.rs
+
+主要改动:
+- 新增 src-tauri/src/git/commands_branch.rs
+- 将 list/checkout/create/delete/rename/merge/rebase/branch compare/worktree diff 子域从 git/commands.rs 迁出
+- commands.rs 通过 re-export 保持 crate::git::* outward surface 稳定
+- 刷新 docs/architecture 下的 baseline 与 watchlist 文档
+- 补齐 split-git-branch-commands 对应 Trellis PRD 与 OpenSpec artifacts
+
+涉及模块:
+- src-tauri/src/git/commands.rs
+- src-tauri/src/git/commands_branch.rs
+- docs/architecture/large-file-baseline.md
+- docs/architecture/large-file-baseline.json
+- docs/architecture/large-file-near-threshold-watchlist.md
+- .trellis/tasks/04-23-split-git-branch-commands
+- openspec/changes/split-git-branch-commands
+
+验证结果:
+- npm run typecheck 通过
+- cargo test --manifest-path src-tauri/Cargo.toml git:: 通过
+- npm run check:large-files:gate 通过
+- baseline 现仅剩 src-tauri/src/engine/commands.rs 一项 hard debt
+
+后续事项:
+- 下一轮只剩 engine/commands.rs 这一块 P0 热点
+- 如需继续，可单独为 engine command surface 开一轮 modularization
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `332497ee` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
