@@ -603,6 +603,20 @@ impl DaemonState {
         settings_core::get_app_settings_core(&self.app_settings).await
     }
 
+    pub(super) async fn codex_doctor(
+        &self,
+        codex_bin: Option<String>,
+        codex_args: Option<String>,
+    ) -> Result<Value, String> {
+        let settings = self.app_settings.lock().await.clone();
+        crate::codex::run_codex_doctor_with_settings(codex_bin, codex_args, &settings).await
+    }
+
+    pub(super) async fn claude_doctor(&self, claude_bin: Option<String>) -> Result<Value, String> {
+        let settings = self.app_settings.lock().await.clone();
+        crate::codex::run_claude_doctor_with_settings(claude_bin, &settings).await
+    }
+
     pub(super) fn get_codex_unified_exec_external_status(
         &self,
     ) -> Result<crate::types::CodexUnifiedExecExternalStatus, String> {
@@ -1961,6 +1975,22 @@ impl DaemonState {
         serde_json::to_value(result).map_err(|error| error.to_string())
     }
 
+    pub(super) async fn fork_claude_session(
+        &self,
+        workspace_path: String,
+        session_id: String,
+    ) -> Result<Value, String> {
+        let path = PathBuf::from(workspace_path);
+        let forked_session_id =
+            engine::claude_history::fork_claude_session(&path, &session_id).await?;
+        Ok(json!({
+            "thread": {
+                "id": format!("claude:{}", forked_session_id)
+            },
+            "sessionId": forked_session_id
+        }))
+    }
+
     pub(super) async fn fork_claude_session_from_message(
         &self,
         workspace_path: String,
@@ -1980,6 +2010,15 @@ impl DaemonState {
             },
             "sessionId": forked_session_id
         }))
+    }
+
+    pub(super) async fn delete_claude_session(
+        &self,
+        workspace_path: String,
+        session_id: String,
+    ) -> Result<(), String> {
+        let path = PathBuf::from(workspace_path);
+        engine::claude_history::delete_claude_session(&path, &session_id).await
     }
 
     pub(super) async fn list_gemini_sessions(
@@ -2018,6 +2057,24 @@ impl DaemonState {
         )
         .await?;
         serde_json::to_value(result).map_err(|error| error.to_string())
+    }
+
+    pub(super) async fn delete_gemini_session(
+        &self,
+        workspace_path: String,
+        session_id: String,
+    ) -> Result<(), String> {
+        let path = PathBuf::from(workspace_path);
+        let config = self
+            .engine_manager
+            .get_engine_config(engine::EngineType::Gemini)
+            .await;
+        engine::gemini_history::delete_gemini_session(
+            &path,
+            &session_id,
+            config.as_ref().and_then(|item| item.home_dir.as_deref()),
+        )
+        .await
     }
 
     pub(super) async fn list_mcp_server_status(

@@ -1,6 +1,5 @@
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
-use std::io::ErrorKind;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -12,6 +11,7 @@ use tokio::time::timeout;
 pub(crate) mod args;
 pub(crate) mod collaboration_policy;
 pub(crate) mod config;
+mod doctor;
 pub(crate) mod home;
 mod mcp_config;
 pub(crate) mod rewind;
@@ -20,16 +20,14 @@ mod thread_listing;
 pub(crate) mod thread_mode_state;
 
 use self::args::resolve_workspace_codex_args;
+pub(crate) use self::doctor::{run_claude_doctor_with_settings, run_codex_doctor_with_settings};
 pub(crate) use self::home::resolve_workspace_codex_home;
 use self::mcp_config::{
     list_global_mcp_servers as list_global_mcp_servers_impl, GlobalMcpServerEntry,
 };
 use self::thread_listing::{build_unified_codex_thread_page, resolve_workspace_fallback_model};
+use crate::backend::app_server::spawn_workspace_session as spawn_workspace_session_inner;
 pub(crate) use crate::backend::app_server::{ResumePendingSource, WorkspaceSession};
-use crate::backend::app_server::{
-    build_codex_path_env, check_codex_installation, get_cli_debug_info, probe_codex_app_server,
-    resolve_codex_launch_context, spawn_workspace_session as spawn_workspace_session_inner,
-};
 use crate::backend::events::AppServerEvent;
 use crate::engine::SendMessageParams;
 use crate::event_sink::TauriEventSink;
@@ -287,135 +285,46 @@ pub(crate) async fn spawn_workspace_session(
 pub(crate) async fn codex_doctor(
     codex_bin: Option<String>,
     codex_args: Option<String>,
+    app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<Value, String> {
-    let (default_bin, default_args) = {
-        let settings = state.app_settings.lock().await;
-        (settings.codex_bin.clone(), settings.codex_args.clone())
-    };
-    let resolved = codex_bin
-        .clone()
-        .filter(|value| !value.trim().is_empty())
-        .or(default_bin);
-    let resolved_args = codex_args
-        .clone()
-        .filter(|value| !value.trim().is_empty())
-        .or(default_args);
-    let path_env = build_codex_path_env(resolved.as_deref());
+    if remote_backend::is_remote_mode(&*state).await {
+        let codex_bin = codex_bin.map(remote_backend::normalize_path_for_remote);
+        return remote_backend::call_remote(
+            &*state,
+            app,
+            "codex_doctor",
+            json!({ "codexBin": codex_bin, "codexArgs": codex_args }),
+        )
+        .await;
+    }
 
-    // Get debug info first (always collect this)
-    let debug_info = get_cli_debug_info(resolved.as_deref());
+    let settings = state.app_settings.lock().await.clone();
+    run_codex_doctor_with_settings(codex_bin, codex_args, &settings).await
+}
 
-    // Try to check installation - don't fail early, collect all info
-    let version_result = check_codex_installation(resolved.clone()).await;
-    let (version, cli_error) = match version_result {
-        Ok(v) => (v, None),
-        Err(e) => (None, Some(e)),
-    };
+pub(crate) fn remote_claude_doctor_request(claude_bin: Option<String>) -> (&'static str, Value) {
+    (
+        "claude_doctor",
+        json!({
+            "claudeBin": claude_bin.map(remote_backend::normalize_path_for_remote),
+        }),
+    )
+}
 
-    let launch_context = resolve_codex_launch_context(resolved.as_deref());
+#[tauri::command]
+pub(crate) async fn claude_doctor(
+    claude_bin: Option<String>,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Value, String> {
+    if remote_backend::is_remote_mode(&*state).await {
+        let (method, params) = remote_claude_doctor_request(claude_bin);
+        return remote_backend::call_remote(&*state, app, method, params).await;
+    }
 
-    // Try app-server check only if version check passed
-    let probe_status = if version.is_some() {
-        Some(probe_codex_app_server(resolved.clone(), resolved_args.as_deref()).await?)
-    } else {
-        None
-    };
-    let app_server_ok = probe_status
-        .as_ref()
-        .map(|status| status.ok)
-        .unwrap_or(false);
-
-    let (node_ok, node_version, node_details) = {
-        let mut node_command = crate::utils::async_command("node");
-        if let Some(ref path_env) = path_env {
-            node_command.env("PATH", path_env);
-        }
-        node_command.arg("--version");
-        node_command.stdout(std::process::Stdio::piped());
-        node_command.stderr(std::process::Stdio::piped());
-        match timeout(Duration::from_secs(5), node_command.output()).await {
-            Ok(result) => match result {
-                Ok(output) => {
-                    if output.status.success() {
-                        let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                        (
-                            !version.is_empty(),
-                            if version.is_empty() {
-                                None
-                            } else {
-                                Some(version)
-                            },
-                            None,
-                        )
-                    } else {
-                        let stderr = String::from_utf8_lossy(&output.stderr);
-                        let stdout = String::from_utf8_lossy(&output.stdout);
-                        let detail = if stderr.trim().is_empty() {
-                            stdout.trim()
-                        } else {
-                            stderr.trim()
-                        };
-                        (
-                            false,
-                            None,
-                            Some(if detail.is_empty() {
-                                "Node failed to start.".to_string()
-                            } else {
-                                detail.to_string()
-                            }),
-                        )
-                    }
-                }
-                Err(err) => {
-                    if err.kind() == ErrorKind::NotFound {
-                        (false, None, Some("Node not found on PATH.".to_string()))
-                    } else {
-                        (false, None, Some(err.to_string()))
-                    }
-                }
-            },
-            Err(_) => (
-                false,
-                None,
-                Some("Timed out while checking Node.".to_string()),
-            ),
-        }
-    };
-
-    let details = if let Some(ref err) = cli_error {
-        Some(err.clone())
-    } else if let Some(status) = probe_status.as_ref() {
-        if status.ok {
-            None
-        } else {
-            status
-                .details
-                .clone()
-                .or_else(|| Some("Failed to run `codex app-server --help`.".to_string()))
-        }
-    } else {
-        None
-    };
-
-    Ok(json!({
-        "ok": version.is_some() && app_server_ok,
-        "codexBin": resolved,
-        "version": version,
-        "appServerOk": app_server_ok,
-        "details": details,
-        "path": path_env,
-        "nodeOk": node_ok,
-        "nodeVersion": node_version,
-        "nodeDetails": node_details,
-        "resolvedBinaryPath": launch_context.resolved_bin,
-        "wrapperKind": launch_context.wrapper_kind,
-        "pathEnvUsed": launch_context.path_env,
-        "proxyEnvSnapshot": debug_info.get("proxyEnvSnapshot").cloned().unwrap_or(Value::Null),
-        "appServerProbeStatus": probe_status.as_ref().map(|status| status.status.clone()),
-        "fallbackRetried": probe_status.as_ref().map(|status| status.fallback_retried).unwrap_or(false),
-        "debug": debug_info,
-    }))
+    let settings = state.app_settings.lock().await.clone();
+    run_claude_doctor_with_settings(claude_bin, &settings).await
 }
 
 #[tauri::command]

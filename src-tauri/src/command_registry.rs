@@ -84,6 +84,7 @@ pub(crate) fn invoke_handler(
         // Codex
         crate::codex::get_config_model,
         crate::codex::codex_doctor,
+        crate::codex::claude_doctor,
         crate::codex::start_thread,
         crate::codex::send_user_message,
         crate::codex::turn_interrupt,

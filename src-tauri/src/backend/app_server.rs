@@ -36,7 +36,7 @@ use runtime_lifecycle::*;
 #[allow(unused_imports)]
 pub(crate) use crate::backend::app_server_cli::{
     build_codex_command_from_launch_context, build_codex_command_with_bin, build_codex_path_env,
-    can_retry_wrapper_launch, check_codex_installation, probe_codex_app_server,
+    can_retry_wrapper_launch, check_cli_binary, check_codex_installation, probe_codex_app_server,
     resolve_codex_launch_context, visible_console_fallback_enabled_from_env,
     wrapper_kind_for_binary, CodexAppServerProbeStatus, CodexLaunchContext,
 };

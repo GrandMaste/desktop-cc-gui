@@ -46,7 +46,11 @@ import {
   getOpenCodeLspReferences,
   getOpenCodeStatusSnapshot,
   detectEngines,
+  getActiveEngine,
+  getEngineModels,
+  getEngineStatus,
   engineSendMessage,
+  engineInterrupt,
   exportRewindFiles,
   getComputerUseBridgeStatus,
   getWorkspaceSessionProjectionSummary,
@@ -57,13 +61,18 @@ import {
   archiveWorkspaceSessions,
   unarchiveWorkspaceSessions,
   deleteWorkspaceSessions,
+  runCodexDoctor,
+  runClaudeDoctor,
   setOpenCodeMcpToggle,
+  switchEngine,
   readExternalSpecFile,
   readExternalAbsoluteFile,
   resolveFilePreviewHandle,
   writeExternalSpecFile,
   writeExternalAbsoluteFile,
   engineSendMessageSync,
+  deleteClaudeSession,
+  deleteGeminiSession,
 } from "./tauri";
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -134,6 +143,29 @@ describe("tauri invoke wrappers", () => {
     await reloadCodexRuntimeConfig();
 
     expect(invokeMock).toHaveBeenCalledWith("reload_codex_runtime_config");
+  });
+
+  it("invokes codex_doctor with the provided CLI inputs", async () => {
+    const invokeMock = vi.mocked(invoke);
+    invokeMock.mockResolvedValueOnce({ ok: true });
+
+    await runCodexDoctor("/bin/codex", "--profile demo");
+
+    expect(invokeMock).toHaveBeenCalledWith("codex_doctor", {
+      codexBin: "/bin/codex",
+      codexArgs: "--profile demo",
+    });
+  });
+
+  it("invokes claude_doctor with the provided CLI input", async () => {
+    const invokeMock = vi.mocked(invoke);
+    invokeMock.mockResolvedValueOnce({ ok: true });
+
+    await runClaudeDoctor("/bin/claude");
+
+    expect(invokeMock).toHaveBeenCalledWith("claude_doctor", {
+      claudeBin: "/bin/claude",
+    });
   });
 
   it("invokes unified_exec official override command", async () => {
@@ -1379,6 +1411,86 @@ describe("tauri invoke wrappers", () => {
         message:
           "Web 服务当前仅支持 Codex CLI。请切换到 Codex CLI（Web service currently supports Codex CLI only）.",
       },
+    });
+  });
+
+  it("invokes get_active_engine", async () => {
+    const invokeMock = vi.mocked(invoke);
+    invokeMock.mockResolvedValueOnce("claude");
+
+    const engine = await getActiveEngine();
+
+    expect(engine).toBe("claude");
+    expect(invokeMock).toHaveBeenCalledWith("get_active_engine");
+  });
+
+  it("maps switch_engine params", async () => {
+    const invokeMock = vi.mocked(invoke);
+    invokeMock.mockResolvedValueOnce(undefined);
+
+    await switchEngine("claude");
+
+    expect(invokeMock).toHaveBeenCalledWith("switch_engine", {
+      engineType: "claude",
+    });
+  });
+
+  it("maps get_engine_status params", async () => {
+    const invokeMock = vi.mocked(invoke);
+    invokeMock.mockResolvedValueOnce(null);
+
+    const status = await getEngineStatus("claude");
+
+    expect(status).toBeNull();
+    expect(invokeMock).toHaveBeenCalledWith("get_engine_status", {
+      engineType: "claude",
+    });
+  });
+
+  it("maps get_engine_models params", async () => {
+    const invokeMock = vi.mocked(invoke);
+    invokeMock.mockResolvedValueOnce([]);
+
+    const models = await getEngineModels("claude");
+
+    expect(models).toEqual([]);
+    expect(invokeMock).toHaveBeenCalledWith("get_engine_models", {
+      engineType: "claude",
+    });
+  });
+
+  it("maps engine_interrupt params", async () => {
+    const invokeMock = vi.mocked(invoke);
+    invokeMock.mockResolvedValueOnce(undefined);
+
+    await engineInterrupt("ws-interrupt");
+
+    expect(invokeMock).toHaveBeenCalledWith("engine_interrupt", {
+      workspaceId: "ws-interrupt",
+    });
+  });
+
+  it("maps delete_claude_session params", async () => {
+    const invokeMock = vi.mocked(invoke);
+    invokeMock.mockResolvedValueOnce(undefined);
+
+    await deleteClaudeSession("/tmp/workspace", "claude-session-1");
+
+    expect(invokeMock).toHaveBeenCalledWith("delete_claude_session", {
+      workspacePath: "/tmp/workspace",
+      sessionId: "claude-session-1",
+    });
+  });
+
+  it("maps delete_gemini_session params", async () => {
+    const invokeMock = vi.mocked(invoke);
+    invokeMock.mockResolvedValueOnce(undefined);
+
+    await deleteGeminiSession("/tmp/workspace", "gemini-session-1");
+
+    expect(invokeMock).toHaveBeenCalledWith("delete_gemini_session", {
+      workspacePath: "/tmp/workspace",
+      sessionId: "gemini-session-1",
     });
   });
 });

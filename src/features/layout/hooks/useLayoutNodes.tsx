@@ -231,7 +231,10 @@ type LayoutNodesOptions = {
   onConnectWorkspace: (workspace: WorkspaceInfo) => Promise<void>;
   onAddAgent: (workspace: WorkspaceInfo, engine?: EngineType) => Promise<void>;
   engineOptions?: EngineDisplayInfo[];
-  onRefreshEngineOptions?: () => Promise<void> | void;
+  onRefreshEngineOptions?: () =>
+    | Promise<import("../../engine/hooks/useEngineController").EngineRefreshResult | void>
+    | import("../../engine/hooks/useEngineController").EngineRefreshResult
+    | void;
   onAddSharedAgent: (workspace: WorkspaceInfo) => Promise<void>;
   onAddWorktreeAgent: (workspace: WorkspaceInfo) => Promise<void>;
   onAddCloneAgent: (workspace: WorkspaceInfo) => Promise<void>;

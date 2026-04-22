@@ -5,8 +5,6 @@ import type {
   AgentImportApplyResult,
   AgentImportPreviewResult,
   AppSettings,
-  ComputerUseBridgeStatus,
-  CodexDoctorResult,
   DictationModelStatus,
   DictationSessionState,
   LocalUsageSnapshot,
@@ -49,6 +47,8 @@ export {
   setCodexUnifiedExecOfficialOverride,
 } from "./tauri/settings";
 export { getComputerUseBridgeStatus } from "./tauri/computerUse";
+export { runClaudeDoctor, runCodexDoctor } from "./tauri/doctor";
+export type { ComputerUseBridgeStatus } from "../types";
 
 function isMissingTauriInvokeError(error: unknown) {
   return (
@@ -1418,8 +1418,6 @@ export async function updateAppSettings(
   return invoke<AppSettings>("update_app_settings", { settings });
 }
 
-export type { ComputerUseBridgeStatus };
-
 export type WebServerStatus = {
   running: boolean;
   rpcEndpoint: string;
@@ -1485,13 +1483,6 @@ export async function updateMenuLabels(
   updates: MenuLabelUpdate[],
 ): Promise<void> {
   return invoke("menu_update_labels", { updates });
-}
-
-export async function runCodexDoctor(
-  codexBin: string | null,
-  codexArgs: string | null,
-): Promise<CodexDoctorResult> {
-  return invoke<CodexDoctorResult>("codex_doctor", { codexBin, codexArgs });
 }
 
 export type WorkspaceFilesResponse = {

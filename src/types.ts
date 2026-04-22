@@ -232,6 +232,7 @@ export type ComputerUseBridgeStatus = {
 };
 
 export type AppSettings = {
+  claudeBin: string | null;
   codexBin: string | null;
   codexArgs: string | null;
   backendMode: BackendMode;
@@ -461,8 +462,8 @@ export type CodexDoctorResult = {
     wrapperKind?: string | null;
     pathEnvUsed?: string | null;
     proxyEnvSnapshot?: Record<string, string | null>;
-    envVars: Record<string, string | null>;
-    extraSearchPaths: Array<{
+    envVars?: Record<string, string | null>;
+    extraSearchPaths?: Array<{
       path: string;
       exists: boolean;
       isDir: boolean;

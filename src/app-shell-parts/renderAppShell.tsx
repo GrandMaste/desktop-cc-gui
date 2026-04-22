@@ -38,7 +38,7 @@ export function renderAppShell(ctx: any) {
     confirmWorktreePrompt, connectWorkspace, createBranch, createPrompt, createWorkspaceGroup, debugEntries, debugOpen, debugPanelFullNode,
     debugPanelHeight, debugPanelNode, defaultModel, deletePrompt, deleteThreadPrompt, deleteWorkspaceGroup, deletingWorktreeIds, delta,
     desktopTopbarLeftNode, dictationError, dictationHint, dictationLevel, dictationModel, dictationReady, dictationState, dictationTranscript,
-    diffScrollRequestId, diffSource, directories, dismissErrorToast, dismissUpdate, doctor, dragHandle, dropOverlayActive,
+    diffScrollRequestId, diffSource, directories, dismissErrorToast, dismissUpdate, doctor, claudeDoctor, dragHandle, dropOverlayActive,
     dropOverlayText, editorHighlightTarget, editorNavigationTarget, editorSplitLayout, effectiveModels, effectiveReasoningSupported, effectiveRuntimeMode, effectiveSelectedModel,
     effectiveSelectedModelId, effectiveUiMode, engineModelsAsOptions, engineSelectedModelIdByType, engineSelection, engineStatuses, ensureLaunchTerminal, ensureTerminalWithTitle,
     ensureWorkspaceThreadListLoaded, entry, errorToasts, errorToastsNode, existing, exitDiffView, expandRightPanel, expandSidebar,
@@ -399,7 +399,8 @@ export function renderAppShell(ctx: any) {
                   setAppSettings(next);
                   await queueSaveSettings(next);
                 }}
-                onRunDoctor={doctor}
+                onRunCodexDoctor={doctor}
+                onRunClaudeDoctor={claudeDoctor}
                 activeWorkspace={activeWorkspace}
                 activeEngine={activeEngine}
                 onUpdateWorkspaceCodexBin={async (id, codexBin) => {

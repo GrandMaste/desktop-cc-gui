@@ -167,7 +167,17 @@ vi.mock("react-i18next", () => ({
         "settings.sidebarReleaseNotes": "Release Notes",
         "settings.releaseNotesDescription": "Review feature updates and fixes from every release.",
         "settings.openReleaseNotes": "Open release notes",
-        "settings.sidebarCodex": "Codex",
+        "settings.sidebarCodex": "CLI Validation",
+        "settings.cliValidationTitle": "CLI Validation",
+        "settings.cliValidationDescription":
+          "Validate the CLIs used by ccgui, choose the shared execution backend once, and switch diagnostics between Codex and Claude Code.",
+        "settings.cliExecutionBackendTitle": "Execution backend",
+        "settings.cliExecutionBackendDescription":
+          "These transport settings are shared by Codex and Claude Code runtime requests.",
+        "settings.cliValidationTabCodex": "Codex",
+        "settings.cliValidationTabClaudeCode": "Claude Code",
+        "settings.runClaudeDoctor": "Run Claude Doctor",
+        "settings.defaultClaudePath": "Default Claude Code path",
         "settings.sidebarExperimental": "Experimental",
         "settings.basicAppearance": "Appearance",
         "settings.basicBehavior": "Behavior",
