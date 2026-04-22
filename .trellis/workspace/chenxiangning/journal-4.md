@@ -1114,3 +1114,62 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 122: Split runtime session lifecycle submodule
+
+**Date**: 2026-04-23
+**Task**: Split runtime session lifecycle submodule
+**Branch**: `feature/v-0.4.8`
+
+### Summary
+
+(Add summary)
+
+### Main Changes
+
+任务目标:
+- 清理 runtime/mod.rs hard debt
+- 将 workspace session lifecycle 子域抽到独立 backend-local 模块
+- 保持 crate::runtime outward surface 和 command contract 稳定
+
+主要改动:
+- 新增 src-tauri/src/runtime/session_lifecycle.rs
+- 将 close/evict/terminate/replace/rollback helper 从 runtime/mod.rs 迁出
+- runtime/mod.rs 通过 re-export 维持 replace_workspace_session、stop_workspace_session、terminate_workspace_session 等既有入口
+- 补齐 split-runtime-session-lifecycle 对应 Trellis PRD 与 OpenSpec artifacts
+
+涉及模块:
+- src-tauri/src/runtime/mod.rs
+- src-tauri/src/runtime/session_lifecycle.rs
+- .trellis/tasks/04-23-split-runtime-session-lifecycle
+- openspec/changes/split-runtime-session-lifecycle
+
+验证结果:
+- npm run typecheck 通过
+- cargo test --manifest-path src-tauri/Cargo.toml runtime:: 通过
+- npm run check:large-files:gate 通过
+- runtime/mod.rs 已降到 hard gate 以下
+
+后续事项:
+- 继续提交 git branch command modularization
+- 在最终一轮刷新 baseline/watchlist 文档
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `8556b2c4` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-4.md`
-- **Total Sessions**: 121
+- **Total Sessions**: 122
 - **Last Active**: 2026-04-23
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-4.md` | ~1116 | Active |
+| `journal-4.md` | ~1175 | Active |
 | `journal-3.md` | ~1972 | Archived |
 | `journal-2.md` | ~1960 | Archived |
 | `journal-1.md` | ~1990 | Archived |
@@ -32,6 +32,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 122 | 2026-04-23 | Split runtime session lifecycle submodule | `8556b2c4` | `feature/v-0.4.8` |
 | 121 | 2026-04-23 | Split settings, composer, and git history style shards | `4c2e28ee` | `feature/v-0.4.8` |
 | 120 | 2026-04-23 | Split thread actions and thread item hotspots | `f4deb70d` | `feature/v-0.4.8` |
 | 119 | 2026-04-23 | Split tauri, app shell, and thread messaging hotspots | `1b25ff26` | `feature/v-0.4.8` |
