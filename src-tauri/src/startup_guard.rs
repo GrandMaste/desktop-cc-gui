@@ -171,7 +171,11 @@ pub(crate) fn bootstrap_mark_renderer_ready() -> Result<(), String> {
     {
         return mark_renderer_ready();
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "linux")]
+    {
+        return crate::linux_startup_guard::mark_renderer_ready();
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
     {
         Ok(())
     }
