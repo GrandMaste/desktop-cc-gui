@@ -1324,3 +1324,47 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 160: 让 Computer Use broker 走 Codex CLI exec
+
+**Date**: 2026-04-23
+**Task**: 让 Computer Use broker 走 Codex CLI exec
+**Branch**: `feature/v-0.4.8`
+
+### Summary
+
+(Add summary)
+
+### Main Changes
+
+任务目标：补齐当前客户端使用 Computer Use 的真实执行链路，不能停留在 app-server prompt 转发；交付标准是 UI 触发后走 Codex CLI 加载官方 Computer Use plugin。
+
+主要改动：将 run_computer_use_codex_broker 改为执行 codex exec --json --sandbox read-only；继承 workspace/app 的 codexBin、codexArgs、codexHome；按 selected workspace path 设置 -C 和 current_dir；解析 Codex JSONL 输出中的 agent_message 与 mcp_tool_call；将 failed computer-use tool call 的详情作为 diagnostic text 返回。
+
+边界处理：保留 hard bridge gate，不直接执行 SkyComputerUseClient；空 instruction、workspace missing、unsupported platform、并发 single-flight 仍返回结构化失败；Apple Event -1743、Accessibility、Screen Recording、allowed app approval、permission 等错误映射为 permission_required，避免被误报为普通 Codex 错误。
+
+涉及模块：src-tauri/src/computer_use/broker.rs、src/types.ts、src/i18n/locales/en.part1.ts、src/i18n/locales/zh.part1.ts、openspec/specs/codex-cli-computer-use-broker/spec.md、.trellis/spec/backend/computer-use-bridge.md、.trellis/spec/frontend/computer-use-bridge.md。
+
+验证结果：手工运行 codex exec --json 调用 Computer Use list_apps，确认 CLI 会加载 computer-use MCP 并发起 list_apps tool call；当前机器返回 Apple event error -1743，已按 permission_required 分类；cargo test --manifest-path src-tauri/Cargo.toml computer_use::broker -- --nocapture 通过，6 个 broker 测试通过；npx vitest run src/features/computer-use/hooks/useComputerUseBroker.test.tsx src/features/computer-use/components/ComputerUseStatusCard.test.tsx src/services/tauri.test.ts 通过，94 个测试通过；npm run typecheck 通过；npm run check:large-files 通过，found=0；openspec validate --all --strict --no-interactive 通过，178 passed；git diff --check 通过。
+
+后续事项：真实 UI 中点击 Run with Codex 后，如果仍返回 permission_required，需要在 macOS System Settings 中给触发进程相关 Accessibility / Screen Recording / Automation 权限，或完成 Codex Computer Use allowed-app approval 后重试。
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `d17522c2` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
