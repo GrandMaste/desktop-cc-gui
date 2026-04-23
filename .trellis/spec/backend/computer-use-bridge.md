@@ -205,9 +205,12 @@ struct ComputerUseOfficialParentHandoffDiscovery {
   - MUST NOT 写入官方 Codex App、plugin cache、helper bundle、系统权限或 approval 配置
 - `run_computer_use_codex_broker` 是显式 Computer Use task handoff 入口：
   - MUST 只在用户输入明确任务后调用，不得由 status refresh / activation / diagnostics 自动链式触发
-  - MUST 使用 Codex app-server / Codex CLI runtime 创建托管线程，让官方 Codex runtime 成为 Computer Use parent
+  - MUST 优先使用 `codex exec --json` 执行显式任务，让 Codex CLI 加载官方 Computer Use plugin
   - MUST NOT direct exec `SkyComputerUseClient` 或任何官方 helper 二进制
-  - MUST 使用 `read-only` access mode 执行 broker prompt，除非未来 spec 明确允许仓库写入
+  - MUST 使用 `--sandbox read-only` 执行 broker prompt，除非未来 spec 明确允许仓库写入
+  - MUST 继承 workspace / app 的 `codexBin`、`codexArgs`、`codexHome` 配置
+  - MUST 解析 `codex exec --json` 事件中的 `agent_message` 与 `mcp_tool_call`
+  - MUST 将 failed `computer-use` MCP tool call 映射为结构化失败或阻塞结果，并保留 bounded diagnostic detail
   - MUST 使用 single-flight guard；并发触发返回 `already_running`
   - MUST 对空 instruction 返回 `invalid_instruction`
   - MUST 校验 workspace id 存在，否则返回 `workspace_missing`
@@ -283,6 +286,7 @@ struct ComputerUseOfficialParentHandoffDiscovery {
 | broker 遇到 CLI cache contract 且仅剩 permission/approval blocker | broker result | 允许交给 Codex runtime；结果由 Codex runtime 文本/错误决定 |
 | broker 遇到 `helper_bridge_unverified` | broker result | `blocked` + `bridge_blocked` |
 | broker 遇到 bundled nested helper contract | broker result | `blocked` + `bridge_blocked` |
+| broker 收到 `computer-use` MCP tool failed 且含 Apple Event / permission 文案 | broker result | `blocked` + `permission_required` |
 | broker 调用 Codex runtime timeout | broker result | `failed` + `timeout` |
 | broker 调用 Codex runtime error | broker result | `failed` + `codex_error` |
 | official parent handoff discovery 只发现 team/application group parent contract | handoff discovery | `requires_official_parent` |

@@ -321,6 +321,7 @@ export type ComputerUseBrokerFailureKind =
   | "codex_runtime_unavailable"
   | "already_running"
   | "invalid_instruction"
+  | "permission_required"
   | "timeout"
   | "codex_error"
   | "unknown";

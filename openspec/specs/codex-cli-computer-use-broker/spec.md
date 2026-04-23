@@ -8,16 +8,21 @@ Define how mossx hands explicit Computer Use tasks to the official Codex CLI/run
 
 mossx MUST use the official Codex runtime as the parent that can invoke Computer Use tools.
 
-#### Scenario: explicit broker task uses codex hidden thread
+#### Scenario: explicit broker task uses codex exec
 - **WHEN** 用户在 Computer Use surface 显式提交 broker 任务
-- **THEN** mossx MUST create or reuse an official Codex app-server session for the selected workspace
-- **AND** MUST execute the task through a hidden Codex thread
+- **THEN** mossx MUST run the task through `codex exec --json` for the selected workspace
+- **AND** the Codex CLI execution MUST load the official Computer Use plugin from the user's Codex config/cache
 - **AND** MUST NOT direct exec `SkyComputerUseClient`
 
 #### Scenario: broker result is returned as structured outcome
-- **WHEN** Codex hidden thread completes
+- **WHEN** Codex CLI execution completes
 - **THEN** broker MUST return `completed` with bounded text result
 - **AND** MUST include updated bridge status and duration
+
+#### Scenario: computer use tool failure is surfaced
+- **WHEN** Codex CLI emits a failed `computer-use` MCP tool call
+- **THEN** broker MUST return a structured blocked or failed result
+- **AND** MUST include the tool failure detail in diagnostic text
 
 ### Requirement: Broker MUST Enforce Hard Bridge Readiness Before Starting Codex
 
@@ -30,7 +35,7 @@ Broker MUST not start desktop automation while Computer Use bridge still has har
 
 #### Scenario: manual permission blockers allow explicit broker attempt
 - **WHEN** bridge status only contains `permission_required` and/or `approval_required`
-- **THEN** broker MAY start a Codex hidden thread after explicit user action
+- **THEN** broker MAY start Codex CLI execution after explicit user action
 - **AND** UI MUST explain that macOS permissions or app approval may still stop the task
 
 #### Scenario: unsupported platform prevents broker execution
@@ -50,7 +55,7 @@ Broker execution MUST only happen after a direct user action and MUST prevent co
 #### Scenario: refresh does not trigger broker
 - **WHEN** user refreshes Computer Use status
 - **THEN** broker MUST NOT run
-- **AND** no Codex hidden thread is created
+- **AND** no Codex CLI execution is created
 
 #### Scenario: duplicate run is rejected
 - **WHEN** a broker task is already running

@@ -1,7 +1,9 @@
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+use std::process::Stdio;
 use std::time::Instant;
 use tauri::{AppHandle, State};
+use tokio::time::{timeout, Duration};
 
 use super::{
     path_looks_like_codex_cli_computer_use_cache, resolve_computer_use_bridge_status,
@@ -10,6 +12,7 @@ use super::{
 };
 
 const COMPUTER_USE_BROKER_RESULT_LIMIT: usize = 4_000;
+const COMPUTER_USE_BROKER_TIMEOUT_SECS: u64 = 600;
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -38,6 +41,7 @@ pub(crate) enum ComputerUseBrokerFailureKind {
     CodexRuntimeUnavailable,
     AlreadyRunning,
     InvalidInstruction,
+    PermissionRequired,
     Timeout,
     CodexError,
     Unknown,
@@ -56,7 +60,7 @@ pub(crate) struct ComputerUseBrokerResult {
 
 #[tauri::command]
 pub(crate) async fn run_computer_use_codex_broker(
-    app: AppHandle,
+    _app: AppHandle,
     state: State<'_, crate::state::AppState>,
     request: ComputerUseBrokerRequest,
 ) -> Result<ComputerUseBrokerResult, String> {
@@ -84,13 +88,28 @@ pub(crate) async fn run_computer_use_codex_broker(
         ));
     }
 
-    if !workspace_exists(&state, &request.workspace_id).await {
+    let workspace_context =
+        match resolve_broker_workspace_context(&state, &request.workspace_id).await {
+            Some(context) => context,
+            None => {
+                return Ok(build_broker_result(
+                    ComputerUseBrokerOutcome::Failed,
+                    Some(ComputerUseBrokerFailureKind::WorkspaceMissing),
+                    bridge_status,
+                    None,
+                    Some("Computer Use broker workspace was not found.".to_string()),
+                    started_at.elapsed().as_millis() as u64,
+                ));
+            }
+        };
+
+    if !Path::new(&workspace_context.path).is_dir() {
         return Ok(build_broker_result(
             ComputerUseBrokerOutcome::Failed,
             Some(ComputerUseBrokerFailureKind::WorkspaceMissing),
             bridge_status,
             None,
-            Some("Computer Use broker workspace was not found.".to_string()),
+            Some("Computer Use broker workspace path is missing or not a directory.".to_string()),
             started_at.elapsed().as_millis() as u64,
         ));
     }
@@ -113,15 +132,11 @@ pub(crate) async fn run_computer_use_codex_broker(
     };
 
     let broker_prompt = build_codex_broker_prompt(&instruction);
-    let broker_result = crate::engine::codex_prompt_service::run_codex_prompt_sync(
-        &request.workspace_id,
+    let broker_result = run_codex_exec_computer_use_broker(
+        workspace_context,
         &broker_prompt,
         request.model,
         request.effort,
-        Some("read-only".to_string()),
-        None,
-        &app,
-        &state,
     )
     .await;
 
@@ -134,14 +149,17 @@ pub(crate) async fn run_computer_use_codex_broker(
             Some("Computer Use task completed through the official Codex runtime.".to_string()),
             started_at.elapsed().as_millis() as u64,
         )),
-        Err(error) => Ok(build_broker_result(
-            ComputerUseBrokerOutcome::Failed,
-            Some(classify_broker_codex_error(&error)),
-            bridge_status,
-            None,
-            Some(error),
-            started_at.elapsed().as_millis() as u64,
-        )),
+        Err(error) => {
+            let failure_kind = classify_broker_codex_error(&error);
+            Ok(build_broker_result(
+                broker_outcome_for_failure(failure_kind),
+                Some(failure_kind),
+                bridge_status,
+                None,
+                Some(error),
+                started_at.elapsed().as_millis() as u64,
+            ))
+        }
     }
 }
 
@@ -239,6 +257,9 @@ fn broker_failure_message(failure_kind: ComputerUseBrokerFailureKind) -> &'stati
         ComputerUseBrokerFailureKind::InvalidInstruction => {
             "Computer Use broker instruction cannot be empty."
         }
+        ComputerUseBrokerFailureKind::PermissionRequired => {
+            "Computer Use broker needs macOS permissions or allowed-app approval."
+        }
         ComputerUseBrokerFailureKind::Timeout => "Computer Use broker timed out.",
         ComputerUseBrokerFailureKind::CodexError => {
             "Codex returned an error for Computer Use broker."
@@ -249,14 +270,237 @@ fn broker_failure_message(failure_kind: ComputerUseBrokerFailureKind) -> &'stati
     }
 }
 
-async fn workspace_exists(state: &crate::state::AppState, workspace_id: &str) -> bool {
+#[derive(Debug, Clone)]
+struct ComputerUseBrokerWorkspaceContext {
+    path: String,
+    codex_bin: Option<String>,
+    codex_args: Option<String>,
+    codex_home: Option<std::path::PathBuf>,
+}
+
+async fn resolve_broker_workspace_context(
+    state: &crate::state::AppState,
+    workspace_id: &str,
+) -> Option<ComputerUseBrokerWorkspaceContext> {
     let trimmed = workspace_id.trim();
     if trimmed.is_empty() {
-        return false;
+        return None;
     }
 
     let workspaces = state.workspaces.lock().await;
-    workspaces.contains_key(trimmed)
+    let entry = workspaces.get(trimmed)?.clone();
+    let parent_entry = entry
+        .parent_id
+        .as_ref()
+        .and_then(|parent_id| workspaces.get(parent_id))
+        .cloned();
+    drop(workspaces);
+
+    let app_settings = state.app_settings.lock().await.clone();
+    let codex_bin = entry
+        .codex_bin
+        .clone()
+        .or_else(|| app_settings.codex_bin.clone());
+    let codex_args = crate::codex::args::resolve_workspace_codex_args(
+        &entry,
+        parent_entry.as_ref(),
+        Some(&app_settings),
+    );
+    let codex_home = crate::codex::resolve_workspace_codex_home(&entry, parent_entry.as_ref());
+
+    Some(ComputerUseBrokerWorkspaceContext {
+        path: entry.path,
+        codex_bin,
+        codex_args,
+        codex_home,
+    })
+}
+
+async fn run_codex_exec_computer_use_broker(
+    context: ComputerUseBrokerWorkspaceContext,
+    broker_prompt: &str,
+    model: Option<String>,
+    effort: Option<String>,
+) -> Result<String, String> {
+    let launch_context =
+        crate::backend::app_server_cli::resolve_codex_launch_context(context.codex_bin.as_deref());
+    let mut command = crate::backend::app_server_cli::build_codex_command_from_launch_context(
+        &launch_context,
+        true,
+    );
+    crate::codex::args::apply_codex_args(&mut command, context.codex_args.as_deref())?;
+    if let Some(codex_home) = context.codex_home {
+        command.env("CODEX_HOME", codex_home);
+    }
+    command
+        .arg("exec")
+        .arg("--json")
+        .arg("--sandbox")
+        .arg("read-only")
+        .arg("-C")
+        .arg(&context.path);
+    if let Some(model) = normalize_optional_cli_arg(model.as_deref()) {
+        command.arg("-m").arg(model);
+    }
+    if let Some(effort) = normalize_optional_cli_arg(effort.as_deref()) {
+        command
+            .arg("-c")
+            .arg(format!("model_reasoning_effort=\"{effort}\""));
+    }
+    command.arg(broker_prompt);
+    command.current_dir(&context.path);
+    command.kill_on_drop(true);
+    command.stdin(Stdio::null());
+    command.stdout(Stdio::piped());
+    command.stderr(Stdio::piped());
+
+    let output = timeout(
+        Duration::from_secs(COMPUTER_USE_BROKER_TIMEOUT_SECS),
+        command.output(),
+    )
+    .await
+    .map_err(|_| "Timeout waiting for Codex exec Computer Use broker.".to_string())?
+    .map_err(|error| format!("Failed to start Codex exec Computer Use broker: {error}"))?;
+
+    parse_codex_exec_broker_output(output)
+}
+
+fn normalize_optional_cli_arg(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|candidate| !candidate.is_empty())
+        .map(ToString::to_string)
+}
+
+fn parse_codex_exec_broker_output(output: std::process::Output) -> Result<String, String> {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let mut transcript = Vec::new();
+    let mut tool_failures = Vec::new();
+
+    for line in stdout
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+    {
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        collect_codex_exec_event_text(&value, &mut transcript, &mut tool_failures);
+    }
+
+    let text = transcript.join("\n").trim().to_string();
+    if !tool_failures.is_empty() {
+        let failure_text = tool_failures.join("\n");
+        let summary = if text.is_empty() {
+            failure_text
+        } else {
+            format!("{text}\n{failure_text}")
+        };
+        return Err(summary);
+    }
+
+    if output.status.success() {
+        if text.is_empty() {
+            return Err("Codex exec returned empty Computer Use broker output.".to_string());
+        }
+        return Ok(text);
+    }
+
+    let fallback = if !text.is_empty() {
+        text
+    } else if !stderr.trim().is_empty() {
+        stderr.trim().to_string()
+    } else if !stdout.trim().is_empty() {
+        stdout.trim().to_string()
+    } else {
+        "Codex exec Computer Use broker exited without output.".to_string()
+    };
+    Err(fallback)
+}
+
+fn collect_codex_exec_event_text(
+    value: &serde_json::Value,
+    transcript: &mut Vec<String>,
+    tool_failures: &mut Vec<String>,
+) {
+    let Some(item) = value.get("item") else {
+        return;
+    };
+    match item.get("type").and_then(|kind| kind.as_str()) {
+        Some("agent_message") => {
+            if let Some(text) = item.get("text").and_then(|text| text.as_str()) {
+                let trimmed = text.trim();
+                if !trimmed.is_empty() {
+                    transcript.push(trimmed.to_string());
+                }
+            }
+        }
+        Some("mcp_tool_call") => collect_mcp_tool_call_text(item, transcript, tool_failures),
+        Some("error") => {
+            if let Some(message) = item.get("message").and_then(|message| message.as_str()) {
+                let trimmed = message.trim();
+                if !trimmed.is_empty() {
+                    transcript.push(trimmed.to_string());
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_mcp_tool_call_text(
+    item: &serde_json::Value,
+    transcript: &mut Vec<String>,
+    tool_failures: &mut Vec<String>,
+) {
+    let server = item
+        .get("server")
+        .and_then(|value| value.as_str())
+        .unwrap_or("unknown");
+    let tool = item
+        .get("tool")
+        .and_then(|value| value.as_str())
+        .unwrap_or("unknown");
+    let status = item
+        .get("status")
+        .and_then(|value| value.as_str())
+        .unwrap_or("unknown");
+
+    if status == "in_progress" {
+        return;
+    }
+
+    let detail = extract_mcp_tool_detail(item).unwrap_or_else(|| status.to_string());
+    let line = format!("Computer Use tool `{server}.{tool}` {status}: {detail}");
+    if status == "failed" || item.get("error").is_some_and(|error| !error.is_null()) {
+        tool_failures.push(line);
+    } else {
+        transcript.push(line);
+    }
+}
+
+fn extract_mcp_tool_detail(item: &serde_json::Value) -> Option<String> {
+    if let Some(error) = item.get("error").filter(|error| !error.is_null()) {
+        return Some(error.to_string());
+    }
+
+    let result = item.get("result")?;
+    let content = result.get("content")?.as_array()?;
+    let mut parts = Vec::new();
+    for entry in content {
+        if let Some(text) = entry.get("text").and_then(|text| text.as_str()) {
+            let trimmed = text.trim();
+            if !trimmed.is_empty() {
+                parts.push(trimmed.to_string());
+            }
+        }
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("\n"))
+    }
 }
 
 fn build_codex_broker_prompt(instruction: &str) -> String {
@@ -296,6 +540,16 @@ fn classify_broker_codex_error(error: &str) -> ComputerUseBrokerFailureKind {
     let normalized = error.to_ascii_lowercase();
     if normalized.contains("timeout") || normalized.contains("timed out") {
         return ComputerUseBrokerFailureKind::Timeout;
+    }
+    if normalized.contains("apple event error -1743")
+        || normalized.contains("not authorized")
+        || normalized.contains("accessibility")
+        || normalized.contains("screen recording")
+        || normalized.contains("allowed app")
+        || normalized.contains("approval")
+        || normalized.contains("permission")
+    {
+        return ComputerUseBrokerFailureKind::PermissionRequired;
     }
     if normalized.contains("workspace") && normalized.contains("not found") {
         return ComputerUseBrokerFailureKind::WorkspaceMissing;
@@ -431,5 +685,53 @@ mod tests {
             bounded.chars().count(),
             COMPUTER_USE_BROKER_RESULT_LIMIT + 3
         );
+    }
+
+    #[test]
+    fn codex_exec_output_collects_agent_and_tool_text() {
+        let stdout = r#"{"type":"item.completed","item":{"type":"agent_message","text":"checking apps"}}
+{"type":"item.completed","item":{"type":"mcp_tool_call","server":"computer-use","tool":"list_apps","status":"completed","result":{"content":[{"type":"text","text":"Safari\nTerminal"}]}}}
+"#;
+        let output = std::process::Output {
+            status: success_status(),
+            stdout: stdout.as_bytes().to_vec(),
+            stderr: Vec::new(),
+        };
+
+        let parsed = parse_codex_exec_broker_output(output).expect("parsed output");
+
+        assert!(parsed.contains("checking apps"));
+        assert!(parsed.contains("computer-use.list_apps"));
+        assert!(parsed.contains("Safari"));
+    }
+
+    #[test]
+    fn codex_exec_output_classifies_failed_tool_as_permission_required() {
+        let stdout = r#"{"type":"item.completed","item":{"type":"mcp_tool_call","server":"computer-use","tool":"list_apps","status":"failed","result":{"content":[{"type":"text","text":"Apple event error -1743: Unknown error"}]}}}
+"#;
+        let output = std::process::Output {
+            status: success_status(),
+            stdout: stdout.as_bytes().to_vec(),
+            stderr: Vec::new(),
+        };
+
+        let error = parse_codex_exec_broker_output(output).expect_err("tool failure");
+
+        assert_eq!(
+            classify_broker_codex_error(&error),
+            ComputerUseBrokerFailureKind::PermissionRequired
+        );
+    }
+
+    #[cfg(unix)]
+    fn success_status() -> std::process::ExitStatus {
+        use std::os::unix::process::ExitStatusExt;
+        std::process::ExitStatus::from_raw(0)
+    }
+
+    #[cfg(windows)]
+    fn success_status() -> std::process::ExitStatus {
+        use std::os::windows::process::ExitStatusExt;
+        std::process::ExitStatus::from_raw(0)
     }
 }

@@ -473,6 +473,7 @@ const zhPart1 = {
           codex_runtime_unavailable: "Codex runtime 不可用。",
           already_running: "已有另一个 Computer Use broker 任务正在运行。",
           invalid_instruction: "任务不能为空。",
+          permission_required: "需要 macOS 系统权限或应用 approval。",
           timeout: "Broker 任务已超时。",
           codex_error: "Codex 返回错误。",
           unknown: "Broker 结束在未预期状态。",

@@ -454,6 +454,7 @@ const enPart1 = {
           codex_runtime_unavailable: "Codex runtime is unavailable.",
           already_running: "Another Computer Use broker task is already running.",
           invalid_instruction: "Task cannot be empty.",
+          permission_required: "macOS permissions or allowed-app approval are required.",
           timeout: "The broker task timed out.",
           codex_error: "Codex returned an error.",
           unknown: "The broker ended in an unexpected state.",

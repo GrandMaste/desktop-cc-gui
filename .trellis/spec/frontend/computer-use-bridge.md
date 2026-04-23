@@ -144,6 +144,7 @@ export type ComputerUseBrokerResult = {
     | "codex_runtime_unavailable"
     | "already_running"
     | "invalid_instruction"
+    | "permission_required"
     | "timeout"
     | "codex_error"
     | "unknown"
@@ -213,6 +214,7 @@ export type ComputerUseBrokerResult = {
   - `status = "ready"` 或仅剩 `permission_required` / `approval_required` soft manual blockers
   - 至少存在一个 connected workspace
 - broker UI MUST 明确说明这是 Codex CLI / official Codex runtime handoff，不是 mossx direct helper execution。
+- broker UI MUST 将 `permission_required` 显示为 macOS 权限或 allowed-app approval 阻塞，而不是普通 Codex 错误。
 - broker UI MUST 展示 workspace selector、task instruction textarea、running state、outcome、duration、failure kind、diagnostic message 与 bounded text result。
 - broker UI MUST 在 bridge gate 未满足时展示阻塞说明，而不是显示可点击运行按钮。
 - broker completed / blocked / failed 三类结果 MUST 使用不同文案表达，不得把 `blocked` 渲染成成功。
@@ -250,6 +252,7 @@ export type ComputerUseBrokerResult = {
 | out-of-order broker responses | 只保留最新 broker result |
 | broker result present then user refreshes | 先 reset broker result，再刷新 status |
 | broker result failed/blocked/completed | 展示 outcome、failure kind、diagnostic message、duration 与 text snippet |
+| broker result `permission_required` | 展示权限/approval 阻塞文案，并保留 Codex CLI 返回的 tool failure 详情 |
 
 ## Good / Base / Bad Cases
 
