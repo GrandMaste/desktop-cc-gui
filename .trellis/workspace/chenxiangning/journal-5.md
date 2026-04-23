@@ -419,3 +419,65 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 144: 增加 heavy test 噪音 CI 门禁
+
+**Date**: 2026-04-23
+**Task**: 增加 heavy test 噪音 CI 门禁
+**Branch**: `feature/v-0.4.8`
+
+### Summary
+
+(Add summary)
+
+### Main Changes
+
+任务目标:
+- 为 heavy Vitest 回归增加可执行的 CI 噪音门禁，防止 repo-owned act/stdout/stderr 噪音回退。
+
+主要改动:
+- 新增 scripts/check-heavy-test-noise.mjs，支持直接运行 heavy batched tests、捕获完整日志、解析 act/stdout/stderr/environment-owned warning，并在 fail 模式下阻断回退。
+- 新增 scripts/check-heavy-test-noise.test.mjs，覆盖 clean log、repo-owned act warning、stdout/stderr payload leak、environment-owned allowlist。
+- 在 package.json 增加 npm run check:heavy-test-noise。
+- 新增 .github/workflows/heavy-test-noise-sentry.yml，作为 pull_request/push/workflow_dispatch 的独立 required-check 候选。
+- 将 enforce-heavy-test-noise-ci-sentry 变更同步进 openspec/specs/heavy-test-noise-cleanliness/spec.md，并归档到 openspec/changes/archive/2026-04-23-enforce-heavy-test-noise-ci-sentry。
+- 新增 Trellis PRD：.trellis/tasks/04-23-enforce-heavy-test-noise-ci-sentry/prd.md。
+
+涉及模块:
+- package.json
+- .github/workflows/heavy-test-noise-sentry.yml
+- scripts/check-heavy-test-noise.mjs
+- scripts/check-heavy-test-noise.test.mjs
+- openspec/specs/heavy-test-noise-cleanliness/spec.md
+- openspec/changes/archive/2026-04-23-enforce-heavy-test-noise-ci-sentry/**
+- .trellis/tasks/04-23-enforce-heavy-test-noise-ci-sentry/prd.md
+
+验证结果:
+- node --test scripts/check-heavy-test-noise.test.mjs 通过。
+- npm run check:heavy-test-noise 通过，heavy suite 346 个 test files 完整跑完，summary 为 act/stdout/stderr/environment warnings 全零。
+- npm run lint 通过。
+- npm run typecheck 通过。
+
+后续事项:
+- 在 GitHub branch protection 中将 Heavy Test Noise Sentry 设置为 required check。
+- 当前 allowlist 仅包含 environment-owned electron_mirror / electron-mirror warning；后续若新增环境噪音来源，需要显式评估后再扩充。
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `bf288c25` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
