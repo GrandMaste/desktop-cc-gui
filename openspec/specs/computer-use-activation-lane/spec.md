@@ -1,7 +1,8 @@
 # computer-use-activation-lane Specification
 
 ## Purpose
-TBD - created by archiving change add-codex-computer-use-activation-bridge. Update Purpose after archive.
+Define the explicit macOS-only Computer Use activation and diagnostics lane. The lane verifies installation and launch-contract evidence without background execution, preserves diagnostics-only fallback when the host is incompatible, and avoids direct helper execution from non-official parent processes.
+
 ## Requirements
 ### Requirement: Activation Lane MUST Be Explicit and macOS-Only
 
@@ -132,7 +133,7 @@ activation lane 在发现 host incompatibility 后 MUST 避免把重复 activati
 
 ### Requirement: Activation Lane MUST Support Codex CLI Plugin Contract Verification
 
-Activation lane MUST support verifying the Codex CLI plugin cache contract without executing the helper directly from mossx.
+Activation lane MUST support verifying the Codex CLI plugin cache contract without executing the helper directly from mossx, and broker execution MUST depend on that verification.
 
 #### Scenario: cli cache contract removes helper bridge blocker
 - **WHEN** CLI plugin cache descriptor and helper file are present
@@ -145,3 +146,7 @@ Activation lane MUST support verifying the Codex CLI plugin cache contract witho
 - **THEN** activation MUST NOT spawn `SkyComputerUseClient`
 - **AND** MUST return a diagnostic message explaining that Codex CLI is the launch parent
 
+#### Scenario: broker may attempt manual permission resolution
+- **WHEN** activation has verified the CLI cache helper contract but only `permission_required` or `approval_required` remains
+- **THEN** broker MAY allow an explicit user-triggered Codex run
+- **AND** guidance MUST explain that official Codex may still require macOS permissions or allowed-app approval

@@ -6,7 +6,9 @@ import { ComputerUseStatusCard } from "./ComputerUseStatusCard";
 
 const useComputerUseBridgeStatusMock = vi.fn();
 const useComputerUseActivationMock = vi.fn();
+const useComputerUseBrokerMock = vi.fn();
 const useComputerUseHostContractDiagnosticsMock = vi.fn();
+const listWorkspacesMock = vi.fn();
 
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
@@ -24,9 +26,17 @@ vi.mock("../hooks/useComputerUseActivation", () => ({
     useComputerUseActivationMock(...args),
 }));
 
+vi.mock("../hooks/useComputerUseBroker", () => ({
+  useComputerUseBroker: (...args: unknown[]) => useComputerUseBrokerMock(...args),
+}));
+
 vi.mock("../hooks/useComputerUseHostContractDiagnostics", () => ({
   useComputerUseHostContractDiagnostics: (...args: unknown[]) =>
     useComputerUseHostContractDiagnosticsMock(...args),
+}));
+
+vi.mock("../../../services/tauri", () => ({
+  listWorkspaces: (...args: unknown[]) => listWorkspacesMock(...args),
 }));
 
 function blockedMacStatus() {
@@ -113,7 +123,17 @@ describe("ComputerUseStatusCard", () => {
   beforeEach(() => {
     useComputerUseBridgeStatusMock.mockReset();
     useComputerUseActivationMock.mockReset();
+    useComputerUseBrokerMock.mockReset();
     useComputerUseHostContractDiagnosticsMock.mockReset();
+    listWorkspacesMock.mockReset();
+    listWorkspacesMock.mockReturnValue(new Promise(() => {}));
+    useComputerUseBrokerMock.mockReturnValue({
+      result: null,
+      isRunning: false,
+      error: null,
+      run: vi.fn(),
+      reset: vi.fn(),
+    });
     useComputerUseHostContractDiagnosticsMock.mockReturnValue({
       result: null,
       isRunning: false,

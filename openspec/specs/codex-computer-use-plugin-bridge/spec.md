@@ -48,6 +48,11 @@
 - **THEN** 核心桥接逻辑 MUST 位于新增模块
 - **AND** 对既有稳定模块的改动 MUST 限定为 command registration、surface 挂载、i18n 文案或等价必要接线
 
+#### Scenario: broker is lazy and user-triggered
+- **WHEN** broker capability is present
+- **THEN** it MUST NOT create Codex hidden threads until the user explicitly submits a Computer Use broker task
+- **AND** ordinary bridge status refresh MUST remain read-only
+
 ### Requirement: Bridge MUST Support Whole-Module Disablement
 
 系统 MUST 提供整块 kill switch，以便在 bridge 回归或宿主不兼容时完全关闭该能力。

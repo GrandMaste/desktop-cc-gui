@@ -9,6 +9,7 @@ use tauri::State;
 
 use crate::codex::{config as codex_config, home as codex_home};
 
+pub(crate) mod broker;
 mod platform;
 
 const COMPUTER_USE_BRIDGE_ENABLED: bool = true;
