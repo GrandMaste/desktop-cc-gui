@@ -20,5 +20,5 @@
 
 - [x] 4.1 运行 targeted hook / delete tests
 - [x] 4.2 运行 `npm run typecheck`
-- [ ] 4.3 进行 restart -> reopen -> delete manual matrix，验证左侧栏与真实 session state 一致
+- [x] 4.3 进行 restart -> reopen -> delete manual matrix，验证左侧栏与真实 session state 一致
 - [x] 4.4 验证非 `Claude` 引擎与正常 `Claude` 路径不回退

@@ -8,7 +8,7 @@
 
 - [x] 2.1 在 `Messages` / `MessagesTimeline` / `MessagesRows` 中补齐 `repeat-turn blanking` 的非空幕布 recovery path
 - [x] 2.2 在 blanking recovery 激活时保留或恢复至少一个可读 surface，并在 completed 后回到稳定终态
-- [ ] 2.3 增加 renderer regression tests，验证 blanking recovery 不会隐式创建新线程或修改当前选中会话 identity
+- [x] 2.3 增加 renderer regression tests，验证 blanking recovery 不会隐式创建新线程或修改当前选中会话 identity
 
 ## 3. Boundary Protection
 
@@ -20,5 +20,5 @@
 
 - [x] 4.1 运行 targeted frontend tests，覆盖 diagnostics 与 render recovery
 - [x] 4.2 运行 `npm run typecheck`
-- [ ] 4.3 在受影响机器上执行 manual matrix，验证第 2 轮及之后不再出现整块空白
+- [x] 4.3 在受影响机器上执行 manual matrix，验证第 2 轮及之后不再出现整块空白
 - [x] 4.4 进行 control-path 验证，确认非受影响 `Claude` 路径与非 `Claude` 引擎不回退
