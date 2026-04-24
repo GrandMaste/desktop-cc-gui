@@ -372,3 +372,80 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 178: 收口 Claude 会话连续性与审批线程作用域
+
+**Date**: 2026-04-25
+**Task**: 收口 Claude 会话连续性与审批线程作用域
+**Branch**: `feature/v0.4.9`
+
+### Summary
+
+提交 Claude continuity、approval thread scoping 与 concurrent realtime isolation 修复
+
+### Main Changes
+
+任务目标：
+- 收口 Claude 会话连续性问题，修复审批后假死、request_user_input 漂移、历史重开闪空。
+- 修复同一 workspace 并行 Claude 会话在 realtime 阶段的串会话问题。
+- 将 approval inline surface 改为 thread scoped，并补充 dismiss/close 兜底能力。
+
+主要改动：
+- 新增 claudeThreadContinuity continuity helper，统一 canonical thread / pending alias / turn-bound continuity 解析。
+- 为 engine SessionStarted 事件透传 optional turnId，并在前端 onThreadSessionIdUpdated 中优先使用 turn-bound pending source 做实时重绑。
+- 调整 approval 与 request_user_input 相关 hook，将状态推进收口到 canonical Claude continuation thread。
+- 调整 Claude history reopen / selection recover 逻辑，保留已有 readable surface，避免 not-found reconcile 直接清空会话。
+- 调整 inline approval 显示策略，仅显示当前 thread 对应 approval；对 legacy 无 threadId approval 保留 workspace fallback。
+- 为 approval 卡增加 close/dismiss 本地销毁能力，不向 backend 发送 accept/decline 决策。
+- 补齐 OpenSpec artifacts：fix-claude-thread-session-continuity、fix-approval-ui-thread-scoping、fix-claude-concurrent-realtime-isolation。
+
+涉及模块：
+- src-tauri/src/engine/events.rs 及 Claude/Gemini/OpenCode/Codex adapter session started emitters
+- src/features/app/hooks/useAppServerEvents.ts
+- src/features/messages/components/Messages.tsx
+- src/features/app/components/ApprovalToasts.tsx
+- src/features/threads/hooks/useThreadActions.ts
+- src/features/threads/hooks/useThreadApprovalEvents.ts
+- src/features/threads/hooks/useThreadApprovals.ts
+- src/features/threads/hooks/useThreadEventHandlers.ts
+- src/features/threads/hooks/useThreadTurnEvents.ts
+- src/features/threads/hooks/useThreadUserInput.ts
+- src/features/threads/hooks/useThreads.ts
+- src/features/threads/utils/claudeThreadContinuity.ts
+- openspec/changes/fix-approval-ui-thread-scoping/**
+- openspec/changes/fix-claude-thread-session-continuity/**
+- openspec/changes/fix-claude-concurrent-realtime-isolation/**
+
+验证结果：
+- pnpm vitest run src/features/app/hooks/useAppServerEvents.test.tsx src/features/threads/hooks/useThreadTurnEvents.test.tsx src/features/threads/hooks/useThreads.pendingResolution.test.ts 通过。
+- cargo test --manifest-path src-tauri/Cargo.toml session_started_maps_turn_id_when_present 通过。
+- npm run typecheck 通过。
+- npm run lint 通过，但仓库仍有 src/features/threads/hooks/useThreadItemEvents.ts 的既有 warning。
+- npm run check:runtime-contracts 通过。
+- openspec validate fix-claude-thread-session-continuity --strict 通过。
+- openspec validate fix-approval-ui-thread-scoping --strict 通过。
+- openspec validate fix-claude-concurrent-realtime-isolation --strict 通过。
+
+后续事项：
+- doctor:strict 仍受仓库现存 branding 检查失败影响，未在本次修复中处理。
+- 工作区仍保留 generated image 链路等未提交改动，后续需按独立提案继续收口。
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `50a3fd774fa485590a823ad119cf8e880c3fc8e4` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
