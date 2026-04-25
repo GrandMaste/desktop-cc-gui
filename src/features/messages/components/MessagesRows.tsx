@@ -123,6 +123,12 @@ type GeneratedImageRowProps = {
 };
 
 const LIVE_ASSISTANT_MARKDOWN_THROTTLE_MS = 48;
+const CODEX_MEDIUM_STREAMING_THROTTLE_MS = 120;
+const CODEX_LARGE_STREAMING_THROTTLE_MS = 220;
+const CODEX_MEDIUM_STREAMING_MIN_LENGTH = 260;
+const CODEX_MEDIUM_STREAMING_MIN_LINES = 6;
+const CODEX_LARGE_STREAMING_MIN_LENGTH = 700;
+const CODEX_LARGE_STREAMING_MIN_LINES = 12;
 
 function areMessageImagesEqual(
   previous: Extract<ConversationItem, { kind: "message" }>["images"],
@@ -189,13 +195,39 @@ function areMessageRowPropsEqual(
 }
 
 function resolveAssistantMessageStreamingThrottleMs(
+  item: Extract<ConversationItem, { kind: "message" }>,
   isStreaming: boolean,
+  activeEngine: MessagesEngine,
   mitigationProfile: StreamMitigationProfile | null | undefined,
+  displayText: string,
 ) {
   if (!isStreaming) {
     return 80;
   }
-  return mitigationProfile?.messageStreamingThrottleMs ?? LIVE_ASSISTANT_MARKDOWN_THROTTLE_MS;
+  if (mitigationProfile?.messageStreamingThrottleMs) {
+    return mitigationProfile.messageStreamingThrottleMs;
+  }
+  if (item.role !== "assistant" || activeEngine !== "codex") {
+    return LIVE_ASSISTANT_MARKDOWN_THROTTLE_MS;
+  }
+  const trimmedText = displayText.trim();
+  if (!trimmedText) {
+    return LIVE_ASSISTANT_MARKDOWN_THROTTLE_MS;
+  }
+  const lineCount = trimmedText.split(/\r?\n/).length;
+  if (
+    trimmedText.length >= CODEX_LARGE_STREAMING_MIN_LENGTH ||
+    lineCount >= CODEX_LARGE_STREAMING_MIN_LINES
+  ) {
+    return CODEX_LARGE_STREAMING_THROTTLE_MS;
+  }
+  if (
+    trimmedText.length >= CODEX_MEDIUM_STREAMING_MIN_LENGTH ||
+    lineCount >= CODEX_MEDIUM_STREAMING_MIN_LINES
+  ) {
+    return CODEX_MEDIUM_STREAMING_THROTTLE_MS;
+  }
+  return LIVE_ASSISTANT_MARKDOWN_THROTTLE_MS;
 }
 
 function resolveReasoningStreamingThrottleMs(
@@ -636,8 +668,11 @@ export const MessageRow = memo(function MessageRow({
             codeBlockStyle="message"
             codeBlockCopyUseModifier={codeBlockCopyUseModifier}
             streamingThrottleMs={resolveAssistantMessageStreamingThrottleMs(
+              item,
               isStreaming,
+              activeEngine,
               streamMitigationProfile,
+              displayText,
             )}
             onOpenFileLink={onOpenFileLink}
             onOpenFileLinkMenu={onOpenFileLinkMenu}

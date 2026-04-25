@@ -78,6 +78,7 @@ vi.mock("../../../utils/threadItems", () => ({
   getThreadTimestamp: vi.fn(),
   isReviewingFromThread: vi.fn(),
   mergeThreadItems: vi.fn(),
+  normalizeItem: vi.fn((item: ConversationItem) => item),
   previewThreadName: vi.fn(),
   stripClaudeApprovalResumeArtifacts: vi.fn((text: string) => text),
 }));
@@ -132,6 +133,9 @@ describe("useThreadActions", () => {
     vi.mocked(trashWorkspaceItem).mockResolvedValue(undefined);
     vi.mocked(writeWorkspaceFile).mockResolvedValue(undefined);
     vi.mocked(loadSidebarSnapshot).mockReturnValue(null);
+    vi.mocked(mergeThreadItems).mockImplementation(
+      (primaryItems: ConversationItem[]) => primaryItems,
+    );
   });
 
   it("starts a thread and activates it by default", async () => {
@@ -484,6 +488,59 @@ describe("useThreadActions", () => {
         steps: [{ step: "Inspect", status: "pending" }],
       },
     });
+  });
+
+  it("hydrates unified codex history through assembler before dispatching thread items", async () => {
+    vi.mocked(resumeThread).mockResolvedValue({
+      result: {
+        thread: {
+          turns: [
+            {
+              id: "turn-assembler-1",
+              items: [],
+            },
+          ],
+        },
+      },
+    });
+    vi.mocked(loadCodexSession).mockResolvedValue({ entries: [] });
+    vi.mocked(buildItemsFromThread).mockReturnValue([
+      {
+        id: "assistant-history-alias-1",
+        kind: "message",
+        role: "assistant",
+        text: "我先检查仓库结构。",
+      },
+      {
+        id: "assistant-history-canonical-1",
+        kind: "message",
+        role: "assistant",
+        text: "我先检查仓库结构。 我先检查仓库结构。",
+      },
+    ] satisfies ConversationItem[]);
+
+    const { result, dispatch } = renderActions({
+      useUnifiedHistoryLoader: true,
+    });
+
+    await act(async () => {
+      await result.current.resumeThreadForWorkspace("ws-1", "thread-assembler");
+    });
+
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "setThreadItems",
+        threadId: "thread-assembler",
+        items: [
+          expect.objectContaining({
+            id: "assistant-history-canonical-1",
+            kind: "message",
+            role: "assistant",
+            text: "我先检查仓库结构。",
+          }),
+        ],
+      }),
+    );
   });
 
   it("reports unified history loader fallback warnings through debug channel", async () => {

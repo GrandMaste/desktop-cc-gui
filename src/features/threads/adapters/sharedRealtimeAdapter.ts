@@ -14,6 +14,7 @@ type RawRealtimeAdapterInput = {
 
 type CommonMapOptions = {
   allowTextDeltaAlias?: boolean;
+  agentMessageSnapshotMode?: "delta" | "snapshot";
 };
 
 const REASONING_SUMMARY_METHODS = new Set([
@@ -463,6 +464,26 @@ export function mapCommonRealtimeEvent(
       );
       if (!text) {
         return null;
+      }
+      if (options.agentMessageSnapshotMode === "snapshot") {
+        return createEvent({
+          engine,
+          workspaceId,
+          threadId,
+          eventId: `${itemId}:${method.split("/")[1]}`,
+          item: {
+            id: itemId,
+            kind: "message",
+            role: "assistant",
+            text,
+          },
+          operation: method === "item/started" ? "itemStarted" : "itemUpdated",
+          sourceMethod: method,
+          rawItem,
+          rawUsage: Object.keys(rawUsage).length > 0 ? rawUsage : null,
+          turnId,
+          timestampMs,
+        });
       }
       return createEvent({
         engine,

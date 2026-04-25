@@ -173,6 +173,31 @@ describe("realtime adapters", () => {
     expect(event?.delta).toBe("streaming body");
   });
 
+  it("maps codex item/updated agentMessage snapshot to assistant itemUpdated event", () => {
+    const event = codexRealtimeAdapter.mapEvent({
+      workspaceId: "ws-codex",
+      message: {
+        method: "item/updated",
+        params: {
+          threadId: "thread-codex-1",
+          item: {
+            id: "assistant-codex-1",
+            type: "agentMessage",
+            text: "codex snapshot body",
+          },
+        },
+      },
+    });
+    expect(event).toBeTruthy();
+    expect(event?.engine).toBe("codex");
+    expect(event?.operation).toBe("itemUpdated");
+    expect(event?.item.kind).toBe("message");
+    if (event?.item.kind === "message") {
+      expect(event.item.text).toBe("codex snapshot body");
+    }
+    expect(event?.delta).toBeNull();
+  });
+
   it("maps fileChange outputDelta to normalized tool output delta event", () => {
     const event = codexRealtimeAdapter.mapEvent({
       workspaceId: "ws-file",

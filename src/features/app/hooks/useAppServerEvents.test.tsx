@@ -2179,9 +2179,9 @@ describe("useAppServerEvents", () => {
     });
   });
 
-  it("keeps codex agentMessage snapshot routing when no streaming delta was seen in normalized mode", async () => {
+  it("routes codex agentMessage snapshots through itemUpdated when no normalized handler is provided", async () => {
     const handlers: Handlers = {
-      onAgentMessageDelta: vi.fn(),
+      onItemUpdated: vi.fn(),
     };
     const { root } = await mount(handlers, {
       useNormalizedRealtimeAdapters: true,
@@ -2204,20 +2204,133 @@ describe("useAppServerEvents", () => {
       });
     });
 
-    expect(handlers.onAgentMessageDelta).toHaveBeenCalledTimes(1);
-    expect(handlers.onAgentMessageDelta).toHaveBeenCalledWith({
-      workspaceId: "ws-codex",
-      threadId: "thread-codex-1",
-      itemId: "assistant-codex-1",
-      delta: "codex snapshot",
-    });
+    expect(handlers.onItemUpdated).toHaveBeenCalledTimes(1);
+    expect(handlers.onItemUpdated).toHaveBeenCalledWith(
+      "ws-codex",
+      "thread-codex-1",
+      expect.objectContaining({
+        id: "assistant-codex-1",
+        type: "agentMessage",
+        text: "codex snapshot",
+      }),
+    );
 
     await act(async () => {
       root.unmount();
     });
   });
 
-  it("ignores codex agentMessage snapshot after streaming delta in normalized mode", async () => {
+  it("routes codex normalized realtime events directly when a normalized handler is provided", async () => {
+    const handlers: Handlers = {
+      onNormalizedRealtimeEvent: vi.fn(),
+      onAgentMessageDelta: vi.fn(),
+    };
+    const { root } = await mount(handlers, {
+      useNormalizedRealtimeAdapters: true,
+    });
+
+    act(() => {
+      listener?.({
+        workspace_id: "ws-codex-direct",
+        message: {
+          method: "item/updated",
+          params: {
+            threadId: "thread-codex-direct-1",
+            item: {
+              id: "assistant-codex-direct-1",
+              type: "agentMessage",
+              text: "codex snapshot direct",
+            },
+          },
+        },
+      });
+    });
+
+    expect(handlers.onNormalizedRealtimeEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        engine: "codex",
+        workspaceId: "ws-codex-direct",
+        threadId: "thread-codex-direct-1",
+        operation: "itemUpdated",
+        sourceMethod: "item/updated",
+        item: expect.objectContaining({
+          id: "assistant-codex-direct-1",
+          kind: "message",
+          role: "assistant",
+          text: "codex snapshot direct",
+        }),
+      }),
+    );
+    expect(handlers.onAgentMessageDelta).not.toHaveBeenCalled();
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it("does not route codex completed agentMessage snapshots through legacy itemCompleted when normalized handler is provided", async () => {
+    const handlers: Handlers = {
+      onNormalizedRealtimeEvent: vi.fn(),
+      onItemCompleted: vi.fn(),
+      onThreadTokenUsageUpdated: vi.fn(),
+    };
+    const { root } = await mount(handlers, {
+      useNormalizedRealtimeAdapters: true,
+    });
+
+    act(() => {
+      listener?.({
+        workspace_id: "ws-codex-direct",
+        message: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-codex-direct-2",
+            item: {
+              id: "assistant-codex-direct-2",
+              type: "agentMessage",
+              text: "final direct text",
+            },
+            usage: {
+              input_tokens: 8,
+              output_tokens: 13,
+            },
+          },
+        },
+      });
+    });
+
+    expect(handlers.onNormalizedRealtimeEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        engine: "codex",
+        workspaceId: "ws-codex-direct",
+        threadId: "thread-codex-direct-2",
+        operation: "completeAgentMessage",
+        item: expect.objectContaining({
+          id: "assistant-codex-direct-2",
+          kind: "message",
+          role: "assistant",
+          text: "final direct text",
+        }),
+      }),
+    );
+    expect(handlers.onItemCompleted).not.toHaveBeenCalled();
+    expect(handlers.onThreadTokenUsageUpdated).toHaveBeenCalledWith(
+      "ws-codex-direct",
+      "thread-codex-direct-2",
+      expect.objectContaining({
+        total: expect.objectContaining({
+          inputTokens: 8,
+          outputTokens: 13,
+        }),
+      }),
+    );
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it("keeps codex item/updated snapshots flowing after streaming delta in normalized mode", async () => {
     const handlers: Handlers = {
       onAgentMessageDelta: vi.fn(),
       onItemUpdated: vi.fn(),
@@ -2264,7 +2377,140 @@ describe("useAppServerEvents", () => {
       itemId: "assistant-codex-2",
       delta: "codex stream",
     });
-    expect(handlers.onItemUpdated).not.toHaveBeenCalled();
+    expect(handlers.onItemUpdated).toHaveBeenCalledTimes(1);
+    expect(handlers.onItemUpdated).toHaveBeenCalledWith(
+      "ws-codex",
+      "thread-codex-2",
+      expect.objectContaining({
+        id: "assistant-codex-2",
+        type: "agentMessage",
+        text: "codex snapshot",
+      }),
+    );
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it("prefers codex item/updated snapshot over later delta for the same assistant item", async () => {
+    const handlers: Handlers = {
+      onNormalizedRealtimeEvent: vi.fn(),
+      onAgentMessageDelta: vi.fn(),
+    };
+    const { root } = await mount(handlers, {
+      useNormalizedRealtimeAdapters: true,
+    });
+
+    act(() => {
+      listener?.({
+        workspace_id: "ws-codex",
+        message: {
+          method: "item/updated",
+          params: {
+            threadId: "thread-codex-3",
+            item: {
+              id: "assistant-codex-3",
+              type: "agentMessage",
+              text: "snapshot authority",
+            },
+          },
+        },
+      });
+    });
+
+    act(() => {
+      listener?.({
+        workspace_id: "ws-codex",
+        message: {
+          method: "item/agentMessage/delta",
+          params: {
+            threadId: "thread-codex-3",
+            itemId: "assistant-codex-3",
+            delta: "late delta after snapshot",
+          },
+        },
+      });
+    });
+
+    expect(handlers.onNormalizedRealtimeEvent).toHaveBeenCalledTimes(1);
+    expect(handlers.onNormalizedRealtimeEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        engine: "codex",
+        workspaceId: "ws-codex",
+        threadId: "thread-codex-3",
+        operation: "itemUpdated",
+        item: expect.objectContaining({
+          id: "assistant-codex-3",
+          kind: "message",
+          role: "assistant",
+          text: "snapshot authority",
+        }),
+      }),
+    );
+    expect(handlers.onAgentMessageDelta).not.toHaveBeenCalled();
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it("prefers codex item/started snapshot over later delta for the same assistant item", async () => {
+    const handlers: Handlers = {
+      onNormalizedRealtimeEvent: vi.fn(),
+      onAgentMessageDelta: vi.fn(),
+    };
+    const { root } = await mount(handlers, {
+      useNormalizedRealtimeAdapters: true,
+    });
+
+    act(() => {
+      listener?.({
+        workspace_id: "ws-codex",
+        message: {
+          method: "item/started",
+          params: {
+            threadId: "thread-codex-started-1",
+            item: {
+              id: "assistant-codex-started-1",
+              type: "agentMessage",
+              text: "started snapshot authority",
+            },
+          },
+        },
+      });
+    });
+
+    act(() => {
+      listener?.({
+        workspace_id: "ws-codex",
+        message: {
+          method: "item/agentMessage/delta",
+          params: {
+            threadId: "thread-codex-started-1",
+            itemId: "assistant-codex-started-1",
+            delta: "late delta after started snapshot",
+          },
+        },
+      });
+    });
+
+    expect(handlers.onNormalizedRealtimeEvent).toHaveBeenCalledTimes(1);
+    expect(handlers.onNormalizedRealtimeEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        engine: "codex",
+        workspaceId: "ws-codex",
+        threadId: "thread-codex-started-1",
+        operation: "itemStarted",
+        item: expect.objectContaining({
+          id: "assistant-codex-started-1",
+          kind: "message",
+          role: "assistant",
+          text: "started snapshot authority",
+        }),
+      }),
+    );
+    expect(handlers.onAgentMessageDelta).not.toHaveBeenCalled();
 
     await act(async () => {
       root.unmount();

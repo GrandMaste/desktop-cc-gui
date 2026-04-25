@@ -47,11 +47,11 @@ import {
   shouldDeduplicateCodexAssistantMessages,
 } from "./useThreadsReducerAssistantDedup";
 import {
-  areSameUserImages,
-  isOptimisticUserMessageId,
-  normalizeComparableUserText,
-  normalizeUserImages,
-} from "../utils/queuedHandoffBubble";
+  buildComparableUserMessageKey,
+  isEquivalentUserObservation,
+} from "../assembly/conversationNormalization";
+import type { NormalizedThreadEvent } from "../contracts/conversationCurtainContracts";
+import { isOptimisticUserMessageId } from "../utils/queuedHandoffBubble";
 import {
   isOptimisticGeneratedImagePlaceholder,
 } from "../utils/generatedImagePlaceholder";
@@ -59,6 +59,7 @@ import {
   replaceMatchingOptimisticGeneratedImagePlaceholder,
   shouldPreserveOptimisticGeneratedImagePlaceholder,
 } from "../utils/generatedImagePlaceholderMatching";
+import { reduceNormalizedRealtimeEvent } from "./threadReducerNormalizedRealtime";
 
 const REDUCER_NOOP_GUARD_ENABLED = isReducerNoopGuardEnabled();
 const INCREMENTAL_DERIVATION_ENABLED = isIncrementalDerivationEnabled();
@@ -114,8 +115,6 @@ function dropMatchingOptimisticUserMessage(
 ) {
   let matchedIndex = -1;
   const optimisticIndexes: number[] = [];
-  const incomingText = normalizeComparableUserText(incoming.text);
-  const incomingImages = normalizeUserImages(incoming.images);
   for (let index = 0; index < list.length; index += 1) {
     const item = list[index];
     if (!item) {
@@ -125,12 +124,7 @@ function dropMatchingOptimisticUserMessage(
       continue;
     }
     optimisticIndexes.push(index);
-    const textMatches = normalizeComparableUserText(item.text) === incomingText;
-    const imageMatches = areSameUserImages(
-      normalizeUserImages(item.images),
-      incomingImages,
-    );
-    if (textMatches && imageMatches) {
+    if (isEquivalentUserObservation(item, incoming)) {
       matchedIndex = index;
       break;
     }
@@ -155,8 +149,6 @@ function findMatchingRealUserMessage(
   list: ConversationItem[],
   candidate: UserMessageItem,
 ) {
-  const candidateText = normalizeComparableUserText(candidate.text);
-  const candidateImages = normalizeUserImages(candidate.images);
   return list.some((item) => {
     if (!isUserMessageItem(item)) {
       return false;
@@ -164,10 +156,7 @@ function findMatchingRealUserMessage(
     if (isOptimisticUserMessageId(item.id)) {
       return false;
     }
-    return (
-      normalizeComparableUserText(item.text) === candidateText &&
-      areSameUserImages(normalizeUserImages(item.images), candidateImages)
-    );
+    return isEquivalentUserObservation(item, candidate);
   });
 }
 
@@ -183,15 +172,10 @@ function mergeThreadItemsPreservingOptimisticUsers(
   const hasSelectedAgentMetadata = (item: UserMessageItem) =>
     hasSelectedAgentName(item.selectedAgentName) ||
     hasSelectedAgentIcon(item.selectedAgentIcon);
-  const toComparableUserMessageKey = (item: UserMessageItem) => {
-    const text = normalizeComparableUserText(item.text);
-    const images = normalizeUserImages(item.images).join("\u0001");
-    return `${text}\u0000${images}`;
-  };
   const toComparableUserMessageSequence = (items: ConversationItem[]) =>
     items
       .filter(isUserMessageItem)
-      .map((item) => toComparableUserMessageKey(item));
+      .map((item) => buildComparableUserMessageKey(item));
   const areSameSequence = (left: string[], right: string[]) => {
     if (left.length !== right.length) {
       return false;
@@ -209,7 +193,7 @@ function mergeThreadItemsPreservingOptimisticUsers(
     if (!isUserMessageItem(item) || !hasSelectedAgentMetadata(item)) {
       continue;
     }
-    const key = toComparableUserMessageKey(item);
+    const key = buildComparableUserMessageKey(item);
     const bucket = localUserMessageMetadataBuckets.get(key) ?? [];
     bucket.push({
       selectedAgentName: item.selectedAgentName ?? null,
@@ -222,7 +206,7 @@ function mergeThreadItemsPreservingOptimisticUsers(
     if (!isUserMessageItem(item)) {
       return item;
     }
-    const key = toComparableUserMessageKey(item);
+    const key = buildComparableUserMessageKey(item);
     const bucket = localUserMessageMetadataBuckets.get(key);
     if (!bucket || bucket.length === 0) {
       return item;
@@ -564,6 +548,13 @@ export type ThreadAction =
       threadId: string;
       item: ConversationItem;
       hasCustomName?: boolean;
+    }
+  | {
+      type: "applyNormalizedRealtimeEvent";
+      workspaceId: string;
+      threadId: string;
+      event: NormalizedThreadEvent;
+      hasCustomName: boolean;
     }
   | { type: "clearOptimisticGeneratedImagePlaceholders"; threadId: string }
   | { type: "evictThreadItems"; threadIds: string[] }
@@ -1938,6 +1929,12 @@ export function threadReducer(state: ThreadState, action: ThreadAction): ThreadS
         threadsByWorkspace: nextThreadsByWorkspace,
       };
     }
+    case "applyNormalizedRealtimeEvent":
+      return reduceNormalizedRealtimeEvent(
+        state,
+        action,
+        maybeRenameThreadFromAgent,
+      );
     case "clearOptimisticGeneratedImagePlaceholders": {
       const list = state.itemsByThread[action.threadId] ?? [];
       const filtered = list.filter(

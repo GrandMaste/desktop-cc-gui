@@ -35,6 +35,7 @@ import { createGeminiHistoryLoader } from "../loaders/geminiHistoryLoader";
 import { parseGeminiHistoryMessages } from "../loaders/geminiHistoryParser";
 import { createOpenCodeHistoryLoader } from "../loaders/opencodeHistoryLoader";
 import { createSharedHistoryLoader } from "../loaders/sharedHistoryLoader";
+import { hydrateHistory } from "../assembly/conversationAssembler";
 import {
   listSharedSessions as listSharedSessionsService,
   loadSharedSession as loadSharedSessionService,
@@ -426,12 +427,13 @@ export function useThreadActions({
             effectiveThreadId: string,
             snapshot: Awaited<ReturnType<ReturnType<typeof createHistoryLoader>["load"]>>,
           ) => {
-            const snapshotItems = snapshot.items;
+            const assembledSnapshot = hydrateHistory(snapshot);
+            const snapshotItems = assembledSnapshot.items;
             dispatch({
               type: "ensureThread",
               workspaceId,
               threadId: effectiveThreadId,
-              engine: snapshot.engine,
+              engine: assembledSnapshot.meta.engine,
             });
             if (snapshotItems.length > 0) {
               dispatch({
@@ -443,7 +445,7 @@ export function useThreadActions({
             dispatch({
               type: "setThreadPlan",
               threadId: effectiveThreadId,
-              plan: snapshot.plan,
+              plan: assembledSnapshot.plan,
             });
             const effectiveLocalItems =
               effectiveThreadId === threadId
@@ -462,7 +464,7 @@ export function useThreadActions({
             if (
               shouldReplaceUserInputQueueFromSnapshot(
                 snapshotItems,
-                snapshot.userInputQueue.length,
+                assembledSnapshot.userInputQueue.length,
                 hasLocalPendingQueue || hasLocalPendingAskTool,
               )
             ) {
@@ -503,7 +505,8 @@ export function useThreadActions({
                   const relatedSnapshot = await createHistoryLoader(relatedThreadId).load(
                     relatedThreadId,
                   );
-                  const relatedSnapshotItems = relatedSnapshot.items;
+                  const relatedAssembledSnapshot = hydrateHistory(relatedSnapshot);
+                  const relatedSnapshotItems = relatedAssembledSnapshot.items;
                   if (relatedSnapshotItems.length > 0) {
                     dispatch({
                       type: "setThreadItems",
@@ -514,7 +517,7 @@ export function useThreadActions({
                   dispatch({
                     type: "setThreadPlan",
                     threadId: relatedThreadId,
-                    plan: relatedSnapshot.plan,
+                    plan: relatedAssembledSnapshot.plan,
                   });
                   restoreThreadParentLinksFromSnapshot(
                     relatedThreadId,
@@ -539,7 +542,7 @@ export function useThreadActions({
                 return relatedThreadId;
               },
             );
-            snapshot.userInputQueue.forEach((request) => {
+            assembledSnapshot.userInputQueue.forEach((request) => {
               dispatch({ type: "addUserInputRequest", request });
             });
             if (snapshot.fallbackWarnings.length > 0) {

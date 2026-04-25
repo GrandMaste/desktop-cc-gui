@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useReducer, useRef, type DragEvent, type MouseEvent, type ReactNode, type RefObject } from "react";
+import { useCallback, useDeferredValue, useMemo, useReducer, useRef, type DragEvent, type MouseEvent, type ReactNode, type RefObject } from "react";
 import { useTranslation } from "react-i18next";
 import { LogicalPosition } from "@tauri-apps/api/dpi";
 import { Menu, MenuItem } from "@tauri-apps/api/menu";
@@ -717,6 +717,27 @@ export function useLayoutNodes(options: LayoutNodesOptions): LayoutNodesResult {
       ),
     [options.activeItems, options.activeQueuedHandoffBubble],
   );
+  const composerLiveInputs = useMemo(
+    () => ({
+      items: options.activeItems,
+      threadItemsByThread: options.threadItemsByThread,
+      threadStatusById: options.threadStatusById,
+      tokenUsage: options.activeTokenUsage,
+      rateLimits: options.activeRateLimits,
+    }),
+    [
+      options.activeItems,
+      options.threadItemsByThread,
+      options.threadStatusById,
+      options.activeTokenUsage,
+      options.activeRateLimits,
+    ],
+  );
+  const deferredComposerLiveInputs = useDeferredValue(composerLiveInputs);
+  const deferredComposerActiveThreadStatus = options.activeThreadId
+    ? deferredComposerLiveInputs.threadStatusById[options.activeThreadId] ??
+      activeThreadStatus
+    : null;
 
   const conversationState = useMemo<ConversationState>(
     () => ({
@@ -1315,21 +1336,25 @@ export function useLayoutNodes(options: LayoutNodesOptions): LayoutNodesResult {
   ) =>
     options.showComposer ? (
       <Composer
-        items={options.activeItems}
+        items={deferredComposerLiveInputs.items}
         activeThreadId={options.activeThreadId}
-        threadItemsByThread={options.threadItemsByThread}
+        threadItemsByThread={deferredComposerLiveInputs.threadItemsByThread}
         threadParentById={options.threadParentById}
-        threadStatusById={options.threadStatusById}
+        threadStatusById={deferredComposerLiveInputs.threadStatusById}
         onSend={options.onSend}
         onQueue={options.onQueue}
         onStop={options.onStop}
         onRewind={options.onRewind}
         canStop={options.canStop}
         disabled={options.isReviewing}
-        contextUsage={options.activeTokenUsage}
+        contextUsage={deferredComposerLiveInputs.tokenUsage}
         contextDualViewEnabled={options.contextDualViewEnabled}
-        isContextCompacting={activeThreadStatus?.isContextCompacting ?? false}
-        accountRateLimits={options.activeRateLimits}
+        isContextCompacting={
+          deferredComposerActiveThreadStatus?.isContextCompacting ??
+          activeThreadStatus?.isContextCompacting ??
+          false
+        }
+        accountRateLimits={deferredComposerLiveInputs.rateLimits}
         usageShowRemaining={options.usageShowRemaining}
         onRefreshAccountRateLimits={options.onRefreshAccountRateLimits}
         queuedMessages={options.activeQueue}

@@ -593,7 +593,7 @@ export function useThreads({
   customPrompts = [],
   onMessageActivity,
   activeEngine = "claude",
-  useNormalizedRealtimeAdapters = false,
+  useNormalizedRealtimeAdapters = true,
   useUnifiedHistoryLoader = false,
   resolveOpenCodeAgent,
   resolveOpenCodeVariant,

@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useRef } from "react";
+import { startTransition, useCallback, useEffect, useRef } from "react";
 import type { Dispatch, MutableRefObject } from "react";
 import { buildConversationItem } from "../../../utils/threadItems";
+import type { NormalizedThreadEvent } from "../contracts/conversationCurtainContracts";
 import { asString } from "../utils/threadNormalize";
 import type { ConversationItem, DebugEntry } from "../../../types";
 import type { ThreadAction } from "./useThreadsReducer";
@@ -170,6 +171,30 @@ type RealtimeDeltaOperation =
     };
 
 const REALTIME_DELTA_BATCH_FLUSH_MS = 12;
+const NORMALIZED_REALTIME_BATCH_FLUSH_MS = 12;
+
+type PendingNormalizedRealtimeOperation = {
+  event: NormalizedThreadEvent;
+  hasCustomName: boolean;
+};
+
+function isCodexAssistantMessageItem(
+  item: NormalizedThreadEvent["item"],
+): item is Extract<ConversationItem, { kind: "message"; role: "assistant" }> {
+  return item.kind === "message" && item.role === "assistant";
+}
+
+function shouldBatchNormalizedRealtimeEvent(event: NormalizedThreadEvent) {
+  return (
+    event.engine === "codex" &&
+    isCodexAssistantMessageItem(event.item) &&
+    (event.operation === "itemStarted" || event.operation === "itemUpdated")
+  );
+}
+
+function buildPendingNormalizedRealtimeOperationKey(event: NormalizedThreadEvent) {
+  return `${event.threadId}\u0000${event.item.kind}\u0000${event.item.id}`;
+}
 
 export function useThreadItemEvents({
   activeThreadId,
@@ -190,6 +215,11 @@ export function useThreadItemEvents({
   const pendingRealtimeDeltaOpsRef = useRef<RealtimeDeltaOperation[]>([]);
   const realtimeFlushTimerRef = useRef<number | null>(null);
   const isFlushingRealtimeDeltaOpsRef = useRef(false);
+  const pendingNormalizedRealtimeOpsRef = useRef<Map<string, PendingNormalizedRealtimeOperation>>(
+    new Map(),
+  );
+  const normalizedRealtimeFlushTimerRef = useRef<number | null>(null);
+  const isFlushingNormalizedRealtimeOpsRef = useRef(false);
   const optimisticGeneratedImageKeysRef = useRef<Set<string>>(new Set());
 
   const clearOptimisticGeneratedImageKeys = useCallback((threadId?: string) => {
@@ -468,17 +498,233 @@ export function useThreadItemEvents({
     [dispatch, flushRealtimeDeltaOps, getCustomName],
   );
 
+  const dispatchNormalizedRealtimeEvent = useCallback(
+    (
+      normalizedEvent: NormalizedThreadEvent,
+      hasCustomName: boolean,
+      options: {
+        ensuredThreads?: Set<string>;
+        markedProcessingThreads?: Set<string>;
+        useTransitionForDispatch?: boolean;
+      } = {},
+    ) => {
+      const run = () => {
+        const {
+          ensuredThreads,
+          markedProcessingThreads,
+        } = options;
+        if (!ensuredThreads?.has(normalizedEvent.threadId)) {
+          dispatch({
+            type: "ensureThread",
+            workspaceId: normalizedEvent.workspaceId,
+            threadId: normalizedEvent.threadId,
+            engine: normalizedEvent.engine,
+          });
+          ensuredThreads?.add(normalizedEvent.threadId);
+        }
+        if (
+          normalizedEvent.operation !== "itemCompleted" &&
+          !markedProcessingThreads?.has(normalizedEvent.threadId)
+        ) {
+          markProcessing(normalizedEvent.threadId, true);
+          markedProcessingThreads?.add(normalizedEvent.threadId);
+        }
+        dispatch({
+          type: "applyNormalizedRealtimeEvent",
+          workspaceId: normalizedEvent.workspaceId,
+          threadId: normalizedEvent.threadId,
+          event: normalizedEvent,
+          hasCustomName,
+        });
+        if (
+          normalizedEvent.operation === "completeAgentMessage" &&
+          normalizedEvent.item.kind === "message" &&
+          normalizedEvent.item.role === "assistant"
+        ) {
+          const timestamp = Date.now();
+          dispatch({
+            type: "setThreadTimestamp",
+            workspaceId: normalizedEvent.workspaceId,
+            threadId: normalizedEvent.threadId,
+            timestamp,
+          });
+          dispatch({
+            type: "setLastAgentMessage",
+            threadId: normalizedEvent.threadId,
+            text: normalizedEvent.item.text,
+            timestamp,
+          });
+          if (normalizedEvent.threadId !== activeThreadId) {
+            dispatch({
+              type: "markUnread",
+              threadId: normalizedEvent.threadId,
+              hasUnread: true,
+            });
+          }
+          recordThreadActivity(
+            normalizedEvent.workspaceId,
+            normalizedEvent.threadId,
+            timestamp,
+          );
+        }
+      };
+      if (options.useTransitionForDispatch === false) {
+        run();
+        return;
+      }
+      startTransition(run);
+    },
+    [activeThreadId, dispatch, markProcessing, recordThreadActivity],
+  );
+
+  const runNormalizedRealtimeEventSideEffects = useCallback(
+    (
+      normalizedEvent: NormalizedThreadEvent,
+      options: {
+        flushPendingRealtimeDeltas?: boolean;
+        skipMessageActivity?: boolean;
+      } = {},
+    ) => {
+      if (normalizedEvent.rawItem) {
+        applyCollabThreadLinks(normalizedEvent.threadId, normalizedEvent.rawItem);
+      }
+      if (
+        normalizedEvent.item.kind === "message" &&
+        normalizedEvent.item.role === "assistant"
+      ) {
+        const messageText =
+          normalizedEvent.delta ??
+          normalizedEvent.item.text;
+        maybeStageOptimisticGeneratedImagePlaceholder({
+          workspaceId: normalizedEvent.workspaceId,
+          threadId: normalizedEvent.threadId,
+          itemId: normalizedEvent.item.id,
+          text: messageText,
+          flushPendingRealtimeDeltas:
+            options.flushPendingRealtimeDeltas ??
+            normalizedEvent.operation === "appendAgentMessageDelta",
+        });
+      }
+      if (normalizedEvent.item.kind === "generatedImage") {
+        clearOptimisticGeneratedImageKeys(normalizedEvent.threadId);
+      }
+      if (
+        normalizedEvent.operation === "completeAgentMessage" &&
+        normalizedEvent.item.kind === "message" &&
+        normalizedEvent.item.role === "assistant"
+      ) {
+        onAgentMessageCompletedExternal?.({
+          workspaceId: normalizedEvent.workspaceId,
+          threadId: normalizedEvent.threadId,
+          itemId: normalizedEvent.item.id,
+          text: normalizedEvent.item.text,
+        });
+      }
+      if (!options.skipMessageActivity) {
+        safeMessageActivity();
+      }
+    },
+    [
+      applyCollabThreadLinks,
+      clearOptimisticGeneratedImageKeys,
+      maybeStageOptimisticGeneratedImagePlaceholder,
+      onAgentMessageCompletedExternal,
+      safeMessageActivity,
+    ],
+  );
+
+  const applyNormalizedRealtimeEventNow = useCallback(
+    (
+      operation: PendingNormalizedRealtimeOperation,
+      options: {
+        ensuredThreads?: Set<string>;
+        markedProcessingThreads?: Set<string>;
+        useTransitionForDispatch?: boolean;
+        skipMessageActivity?: boolean;
+      } = {},
+    ) => {
+      dispatchNormalizedRealtimeEvent(operation.event, operation.hasCustomName, {
+        ensuredThreads: options.ensuredThreads,
+        markedProcessingThreads: options.markedProcessingThreads,
+        useTransitionForDispatch: options.useTransitionForDispatch,
+      });
+      runNormalizedRealtimeEventSideEffects(operation.event, {
+        skipMessageActivity: options.skipMessageActivity,
+      });
+    },
+    [dispatchNormalizedRealtimeEvent, runNormalizedRealtimeEventSideEffects],
+  );
+
+  const flushNormalizedRealtimeOps = useCallback(() => {
+    if (isFlushingNormalizedRealtimeOpsRef.current) {
+      return;
+    }
+    if (normalizedRealtimeFlushTimerRef.current !== null) {
+      window.clearTimeout(normalizedRealtimeFlushTimerRef.current);
+      normalizedRealtimeFlushTimerRef.current = null;
+    }
+    if (pendingNormalizedRealtimeOpsRef.current.size === 0) {
+      return;
+    }
+    isFlushingNormalizedRealtimeOpsRef.current = true;
+    try {
+      const bufferedOps = Array.from(pendingNormalizedRealtimeOpsRef.current.values());
+      pendingNormalizedRealtimeOpsRef.current.clear();
+      const ensuredThreads = new Set<string>();
+      const markedProcessingThreads = new Set<string>();
+      for (const operation of bufferedOps) {
+        applyNormalizedRealtimeEventNow(operation, {
+          ensuredThreads,
+          markedProcessingThreads,
+          useTransitionForDispatch: false,
+          skipMessageActivity: true,
+        });
+      }
+      safeMessageActivity();
+    } finally {
+      isFlushingNormalizedRealtimeOpsRef.current = false;
+    }
+  }, [applyNormalizedRealtimeEventNow, safeMessageActivity]);
+
+  const enqueueNormalizedRealtimeEvent = useCallback(
+    (operation: PendingNormalizedRealtimeOperation) => {
+      if (!enableRealtimeBatchingRef.current) {
+        applyNormalizedRealtimeEventNow(operation, {
+          useTransitionForDispatch: false,
+        });
+        return;
+      }
+      pendingNormalizedRealtimeOpsRef.current.set(
+        buildPendingNormalizedRealtimeOperationKey(operation.event),
+        operation,
+      );
+      if (normalizedRealtimeFlushTimerRef.current !== null) {
+        return;
+      }
+      normalizedRealtimeFlushTimerRef.current = window.setTimeout(() => {
+        flushNormalizedRealtimeOps();
+      }, NORMALIZED_REALTIME_BATCH_FLUSH_MS);
+    },
+    [applyNormalizedRealtimeEventNow, flushNormalizedRealtimeOps],
+  );
+
   useEffect(
     () => () => {
       flushRealtimeDeltaOps();
+      flushNormalizedRealtimeOps();
       if (realtimeFlushTimerRef.current !== null) {
         window.clearTimeout(realtimeFlushTimerRef.current);
         realtimeFlushTimerRef.current = null;
       }
+      if (normalizedRealtimeFlushTimerRef.current !== null) {
+        window.clearTimeout(normalizedRealtimeFlushTimerRef.current);
+        normalizedRealtimeFlushTimerRef.current = null;
+      }
       pendingRealtimeDeltaOpsRef.current = [];
+      pendingNormalizedRealtimeOpsRef.current.clear();
       clearOptimisticGeneratedImageKeys();
     },
-    [clearOptimisticGeneratedImageKeys, flushRealtimeDeltaOps],
+    [clearOptimisticGeneratedImageKeys, flushNormalizedRealtimeOps, flushRealtimeDeltaOps],
   );
 
   const handleItemUpdate = useCallback(
@@ -1016,12 +1262,59 @@ export function useThreadItemEvents({
     [handleToolOutputDelta],
   );
 
+  const onNormalizedRealtimeEvent = useCallback(
+    (event: NormalizedThreadEvent) => {
+      const { workspaceId, threadId } = event;
+      if (isInterruptedThread(interruptedThreadsRef, threadId)) {
+        return;
+      }
+      const hasCustomName = Boolean(getCustomName(workspaceId, threadId));
+      const normalizedItem =
+        event.item.kind === "message" &&
+        event.item.role === "user" &&
+        !event.item.collaborationMode
+          ? {
+              ...event.item,
+              collaborationMode: resolveCollaborationUiMode?.(threadId) ?? null,
+            }
+          : event.item;
+      const normalizedEvent =
+        normalizedItem === event.item
+          ? event
+          : {
+              ...event,
+              item: normalizedItem,
+            };
+      const operation = {
+        event: normalizedEvent,
+        hasCustomName,
+      } satisfies PendingNormalizedRealtimeOperation;
+      if (shouldBatchNormalizedRealtimeEvent(normalizedEvent)) {
+        enqueueNormalizedRealtimeEvent(operation);
+        return;
+      }
+      flushNormalizedRealtimeOps();
+      applyNormalizedRealtimeEventNow(operation, {
+        useTransitionForDispatch: normalizedEvent.operation !== "completeAgentMessage",
+      });
+    },
+    [
+      applyNormalizedRealtimeEventNow,
+      enqueueNormalizedRealtimeEvent,
+      flushNormalizedRealtimeOps,
+      getCustomName,
+      interruptedThreadsRef,
+      resolveCollaborationUiMode,
+    ],
+  );
+
   return {
     onAgentMessageDelta,
     onAgentMessageCompleted,
     onItemStarted,
     onItemUpdated,
     onItemCompleted,
+    onNormalizedRealtimeEvent,
     onReasoningSummaryDelta,
     onReasoningSummaryBoundary,
       onReasoningTextDelta,

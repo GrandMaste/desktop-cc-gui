@@ -36,6 +36,7 @@ type AgentCompleted = {
 };
 
 type AppServerEventHandlers = {
+  onNormalizedRealtimeEvent?: (event: NormalizedThreadEvent) => void;
   onWorkspaceConnected?: (workspaceId: string) => void;
   onThreadStarted?: (workspaceId: string, thread: Record<string, unknown>) => void;
   onThreadSessionIdUpdated?: (
@@ -502,6 +503,7 @@ function extractTokenUsageFromNormalizedEvent(
 }
 
 type ThreadAgentCompletedItemTracker = Record<string, Record<string, true>>;
+type ThreadAgentSnapshotItemTracker = Record<string, Record<string, true>>;
 
 function resolveAgentCompletionKey(itemId: string, text: string): string {
   const normalizedItemId = itemId.trim();
@@ -542,35 +544,84 @@ function markThreadAgentCompletionSeen(
   return true;
 }
 
+function markThreadAgentSnapshotSeen(
+  trackerRef: MutableRefObject<ThreadAgentSnapshotItemTracker>,
+  threadId: string,
+  itemId: string,
+): void {
+  if (!threadId || !itemId) {
+    return;
+  }
+  const threadTracker = trackerRef.current[threadId] ?? {};
+  threadTracker[itemId] = true;
+  trackerRef.current[threadId] = threadTracker;
+}
+
+function hasThreadAgentSnapshotSeen(
+  trackerRef: MutableRefObject<ThreadAgentSnapshotItemTracker>,
+  threadId: string,
+  itemId: string,
+): boolean {
+  if (!threadId || !itemId) {
+    return false;
+  }
+  return Boolean(trackerRef.current[threadId]?.[itemId]);
+}
+
 function routeNormalizedRealtimeEvent({
   handlers,
   workspaceId,
   event,
   threadAgentDeltaSeenRef,
   threadAgentCompletedSeenRef,
+  threadAgentSnapshotSeenRef,
 }: {
   handlers: AppServerEventHandlers;
   workspaceId: string;
   event: NormalizedThreadEvent;
   threadAgentDeltaSeenRef: MutableRefObject<Record<string, true>>;
   threadAgentCompletedSeenRef: MutableRefObject<ThreadAgentCompletedItemTracker>;
+  threadAgentSnapshotSeenRef: MutableRefObject<ThreadAgentSnapshotItemTracker>;
 }): boolean {
   const threadId = event.threadId;
   const itemId = event.item.id;
+  const shouldRouteDirectly = event.engine === "codex" && Boolean(handlers.onNormalizedRealtimeEvent);
   switch (event.operation) {
     case "itemStarted":
+      if (event.engine === "codex" && event.item.kind === "message" && event.item.role === "assistant") {
+        markThreadAgentSnapshotSeen(threadAgentSnapshotSeenRef, threadId, itemId);
+      }
+      if (shouldRouteDirectly) {
+        handlers.onNormalizedRealtimeEvent?.(event);
+        return true;
+      }
       if (event.rawItem) {
         handlers.onItemStarted?.(workspaceId, threadId, event.rawItem);
         return true;
       }
       return false;
     case "itemUpdated":
+      if (event.engine === "codex" && event.item.kind === "message" && event.item.role === "assistant") {
+        markThreadAgentSnapshotSeen(threadAgentSnapshotSeenRef, threadId, itemId);
+      }
+      if (shouldRouteDirectly) {
+        handlers.onNormalizedRealtimeEvent?.(event);
+        return true;
+      }
       if (event.rawItem) {
         handlers.onItemUpdated?.(workspaceId, threadId, event.rawItem);
         return true;
       }
       return false;
     case "itemCompleted":
+      if (shouldRouteDirectly) {
+        handlers.onNormalizedRealtimeEvent?.(event);
+        const tokenUsage = extractTokenUsageFromNormalizedEvent(event);
+        if (tokenUsage) {
+          handlers.onThreadTokenUsageUpdated?.(workspaceId, threadId, tokenUsage);
+        }
+        return true;
+      }
       if (event.rawItem) {
         handlers.onItemCompleted?.(workspaceId, threadId, event.rawItem);
         const tokenUsage = extractTokenUsageFromNormalizedEvent(event);
@@ -599,7 +650,24 @@ function routeNormalizedRealtimeEvent({
       if (!delta) {
         return false;
       }
+      if (
+        event.engine === "codex" &&
+        hasThreadAgentSnapshotSeen(threadAgentSnapshotSeenRef, threadId, itemId)
+      ) {
+        return true;
+      }
       threadAgentDeltaSeenRef.current[threadId] = true;
+      if (shouldRouteDirectly) {
+        handlers.onNormalizedRealtimeEvent?.({
+          ...event,
+          delta,
+          item:
+            event.item.kind === "message"
+              ? { ...event.item, text: delta }
+              : event.item,
+        });
+        return true;
+      }
       handlers.onAgentMessageDelta?.({
         workspaceId,
         threadId,
@@ -610,15 +678,19 @@ function routeNormalizedRealtimeEvent({
     }
     case "completeAgentMessage": {
       const text = event.item.kind === "message" ? event.item.text : "";
-      if (event.rawItem) {
-        handlers.onItemCompleted?.(workspaceId, threadId, event.rawItem);
-      }
       const tokenUsage = extractTokenUsageFromNormalizedEvent(event);
       if (tokenUsage) {
         handlers.onThreadTokenUsageUpdated?.(workspaceId, threadId, tokenUsage);
       }
       if (!markThreadAgentCompletionSeen(threadAgentCompletedSeenRef, threadId, itemId, text)) {
         return true;
+      }
+      if (shouldRouteDirectly) {
+        handlers.onNormalizedRealtimeEvent?.(event);
+        return true;
+      }
+      if (event.rawItem) {
+        handlers.onItemCompleted?.(workspaceId, threadId, event.rawItem);
       }
       handlers.onAgentMessageCompleted?.({
         workspaceId,
@@ -632,6 +704,20 @@ function routeNormalizedRealtimeEvent({
       const delta = event.delta ?? "";
       if (!delta) {
         return false;
+      }
+      if (shouldRouteDirectly) {
+        handlers.onNormalizedRealtimeEvent?.({
+          ...event,
+          delta,
+          item:
+            event.item.kind === "reasoning"
+              ? {
+                  ...event.item,
+                  summary: delta,
+                }
+              : event.item,
+        });
+        return true;
       }
       if (event.engine === "gemini") {
         handlers.onReasoningSummaryDelta?.(
@@ -647,6 +733,10 @@ function routeNormalizedRealtimeEvent({
       return true;
     }
     case "appendReasoningSummaryBoundary":
+      if (shouldRouteDirectly) {
+        handlers.onNormalizedRealtimeEvent?.(event);
+        return true;
+      }
       if (event.engine === "gemini") {
         handlers.onReasoningSummaryBoundary?.(
           workspaceId,
@@ -662,6 +752,20 @@ function routeNormalizedRealtimeEvent({
       const delta = event.delta ?? "";
       if (!delta) {
         return false;
+      }
+      if (shouldRouteDirectly) {
+        handlers.onNormalizedRealtimeEvent?.({
+          ...event,
+          delta,
+          item:
+            event.item.kind === "reasoning"
+              ? {
+                  ...event.item,
+                  content: delta,
+                }
+              : event.item,
+        });
+        return true;
       }
       if (event.engine === "gemini") {
         handlers.onReasoningTextDelta?.(
@@ -680,6 +784,17 @@ function routeNormalizedRealtimeEvent({
       const delta = event.delta ?? "";
       if (!delta || event.item.kind !== "tool") {
         return false;
+      }
+      if (shouldRouteDirectly) {
+        handlers.onNormalizedRealtimeEvent?.({
+          ...event,
+          delta,
+          item: {
+            ...event.item,
+            output: delta,
+          },
+        });
+        return true;
       }
       if (event.item.toolType === "fileChange") {
         handlers.onFileChangeOutputDelta?.(workspaceId, threadId, itemId, delta);
@@ -701,6 +816,7 @@ function tryRouteNormalizedRealtimeEvent({
   threadIdOverride,
   threadAgentDeltaSeenRef,
   threadAgentCompletedSeenRef,
+  threadAgentSnapshotSeenRef,
 }: {
   handlers: AppServerEventHandlers;
   workspaceId: string;
@@ -709,6 +825,7 @@ function tryRouteNormalizedRealtimeEvent({
   threadIdOverride?: string;
   threadAgentDeltaSeenRef: MutableRefObject<Record<string, true>>;
   threadAgentCompletedSeenRef: MutableRefObject<ThreadAgentCompletedItemTracker>;
+  threadAgentSnapshotSeenRef: MutableRefObject<ThreadAgentSnapshotItemTracker>;
 }): boolean {
   const params = (message.params as Record<string, unknown> | undefined) ?? {};
   const turn = (params.turn as Record<string, unknown> | undefined) ?? {};
@@ -754,6 +871,7 @@ function tryRouteNormalizedRealtimeEvent({
     event: normalized,
     threadAgentDeltaSeenRef,
     threadAgentCompletedSeenRef,
+    threadAgentSnapshotSeenRef,
   });
 }
 
@@ -763,6 +881,7 @@ export function useAppServerEvents(
 ) {
   const threadAgentDeltaSeenRef = useRef<Record<string, true>>({});
   const threadAgentCompletedSeenRef = useRef<ThreadAgentCompletedItemTracker>({});
+  const threadAgentSnapshotSeenRef = useRef<ThreadAgentSnapshotItemTracker>({});
   useEffect(() => {
     const useNormalizedRealtimeAdapters = options.useNormalizedRealtimeAdapters === true;
     const unlisten = subscribeAppServerEvents((payload) => {
@@ -953,6 +1072,7 @@ export function useAppServerEvents(
               : {}),
           threadAgentDeltaSeenRef,
           threadAgentCompletedSeenRef,
+          threadAgentSnapshotSeenRef,
         })
       ) {
         return;
@@ -982,6 +1102,7 @@ export function useAppServerEvents(
         if (threadId) {
           delete threadAgentDeltaSeenRef.current[threadId];
           delete threadAgentCompletedSeenRef.current[threadId];
+          delete threadAgentSnapshotSeenRef.current[threadId];
           handlers.onTurnStarted?.(workspace_id, threadId, turnId);
         }
         return;

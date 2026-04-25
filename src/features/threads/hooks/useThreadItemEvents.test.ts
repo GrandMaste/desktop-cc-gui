@@ -292,6 +292,228 @@ describe("useThreadItemEvents", () => {
     expect(placeholderCalls).toHaveLength(2);
   });
 
+  it("applies normalized codex realtime events through the assembler action and stages image placeholders", () => {
+    const { result, dispatch, markProcessing, safeMessageActivity } = makeOptions();
+
+    act(() => {
+      result.current.onNormalizedRealtimeEvent({
+        engine: "codex",
+        workspaceId: "ws-1",
+        threadId: "thread-1",
+        eventId: "evt-1",
+        itemKind: "message",
+        timestampMs: 1,
+        operation: "appendAgentMessageDelta",
+        sourceMethod: "item/agentMessage/delta",
+        delta: "使用 imagegen skill，直接生成一张成年女性肖像。",
+        item: {
+          id: "assistant-assembler-1",
+          kind: "message",
+          role: "assistant",
+          text: "使用 imagegen skill，直接生成一张成年女性肖像。",
+        },
+      });
+    });
+
+    expect(dispatch).toHaveBeenCalledWith({
+      type: "ensureThread",
+      workspaceId: "ws-1",
+      threadId: "thread-1",
+      engine: "codex",
+    });
+    expect(markProcessing).toHaveBeenCalledWith("thread-1", true);
+    expect(dispatch).toHaveBeenCalledWith({
+      type: "applyNormalizedRealtimeEvent",
+      workspaceId: "ws-1",
+      threadId: "thread-1",
+      event: expect.objectContaining({
+        operation: "appendAgentMessageDelta",
+        item: expect.objectContaining({
+          id: "assistant-assembler-1",
+          kind: "message",
+          role: "assistant",
+        }),
+      }),
+      hasCustomName: false,
+    });
+    expect(dispatch).toHaveBeenCalledWith({
+      type: "incrementAgentSegment",
+      threadId: "thread-1",
+    });
+    expect(dispatch).toHaveBeenCalledWith({
+      type: "upsertItem",
+      workspaceId: "ws-1",
+      threadId: "thread-1",
+      item: {
+        id: "optimistic-generated-image:thread-1:assistant-assembler-1",
+        kind: "generatedImage",
+        status: "processing",
+        sourceToolName: "imagegen-intent-placeholder",
+        promptText: "直接生成一张成年女性肖像。",
+        images: [],
+      },
+      hasCustomName: false,
+    });
+    expect(safeMessageActivity).toHaveBeenCalled();
+  });
+
+  it("batches codex assistant snapshots and flushes only the latest realtime frame", () => {
+    vi.useFakeTimers();
+    window.localStorage.setItem("ccgui.perf.realtimeBatching", "1");
+    const { result, dispatch, markProcessing, safeMessageActivity } = makeOptions();
+
+    act(() => {
+      result.current.onNormalizedRealtimeEvent({
+        engine: "codex",
+        workspaceId: "ws-1",
+        threadId: "thread-1",
+        eventId: "evt-1",
+        itemKind: "message",
+        timestampMs: 1,
+        operation: "itemUpdated",
+        sourceMethod: "item/updated",
+        item: {
+          id: "assistant-1",
+          kind: "message",
+          role: "assistant",
+          text: "第一段",
+        },
+      });
+      result.current.onNormalizedRealtimeEvent({
+        engine: "codex",
+        workspaceId: "ws-1",
+        threadId: "thread-1",
+        eventId: "evt-2",
+        itemKind: "message",
+        timestampMs: 2,
+        operation: "itemUpdated",
+        sourceMethod: "item/updated",
+        item: {
+          id: "assistant-1",
+          kind: "message",
+          role: "assistant",
+          text: "第一段\n第二段",
+        },
+      });
+    });
+
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(markProcessing).not.toHaveBeenCalled();
+    expect(safeMessageActivity).not.toHaveBeenCalled();
+
+    act(() => {
+      vi.advanceTimersByTime(20);
+    });
+
+    expect(dispatch).toHaveBeenNthCalledWith(1, {
+      type: "ensureThread",
+      workspaceId: "ws-1",
+      threadId: "thread-1",
+      engine: "codex",
+    });
+    expect(markProcessing).toHaveBeenCalledTimes(1);
+    expect(markProcessing).toHaveBeenCalledWith("thread-1", true);
+    expect(dispatch).toHaveBeenNthCalledWith(2, {
+      type: "applyNormalizedRealtimeEvent",
+      workspaceId: "ws-1",
+      threadId: "thread-1",
+      event: expect.objectContaining({
+        operation: "itemUpdated",
+        item: expect.objectContaining({
+          id: "assistant-1",
+          kind: "message",
+          role: "assistant",
+          text: "第一段\n第二段",
+        }),
+      }),
+      hasCustomName: false,
+    });
+    expect(safeMessageActivity).toHaveBeenCalledTimes(1);
+
+    vi.useRealTimers();
+  });
+
+  it("flushes pending codex assistant snapshots before final completed payloads", () => {
+    vi.useFakeTimers();
+    window.localStorage.setItem("ccgui.perf.realtimeBatching", "1");
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(4567);
+    const externalCallback = vi.fn();
+    const { result, dispatch, safeMessageActivity } = makeOptions({
+      activeThreadId: "thread-1",
+      onAgentMessageCompletedExternal: externalCallback,
+    });
+
+    act(() => {
+      result.current.onNormalizedRealtimeEvent({
+        engine: "codex",
+        workspaceId: "ws-1",
+        threadId: "thread-1",
+        eventId: "evt-1",
+        itemKind: "message",
+        timestampMs: 1,
+        operation: "itemUpdated",
+        sourceMethod: "item/updated",
+        item: {
+          id: "assistant-1",
+          kind: "message",
+          role: "assistant",
+          text: "前半段",
+        },
+      });
+      result.current.onNormalizedRealtimeEvent({
+        engine: "codex",
+        workspaceId: "ws-1",
+        threadId: "thread-1",
+        eventId: "evt-2",
+        itemKind: "message",
+        timestampMs: 2,
+        operation: "completeAgentMessage",
+        sourceMethod: "item/completed",
+        item: {
+          id: "assistant-1",
+          kind: "message",
+          role: "assistant",
+          text: "前半段\n后半段",
+        },
+      });
+    });
+
+    const normalizedDispatches = dispatch.mock.calls
+      .map(([action]) => action)
+      .filter((action) => action?.type === "applyNormalizedRealtimeEvent");
+    expect(normalizedDispatches).toHaveLength(2);
+    expect(normalizedDispatches[0]).toEqual({
+      type: "applyNormalizedRealtimeEvent",
+      workspaceId: "ws-1",
+      threadId: "thread-1",
+      event: expect.objectContaining({
+        operation: "itemUpdated",
+        item: expect.objectContaining({ text: "前半段" }),
+      }),
+      hasCustomName: false,
+    });
+    expect(normalizedDispatches[1]).toEqual({
+      type: "applyNormalizedRealtimeEvent",
+      workspaceId: "ws-1",
+      threadId: "thread-1",
+      event: expect.objectContaining({
+        operation: "completeAgentMessage",
+        item: expect.objectContaining({ text: "前半段\n后半段" }),
+      }),
+      hasCustomName: false,
+    });
+    expect(externalCallback).toHaveBeenCalledWith({
+      workspaceId: "ws-1",
+      threadId: "thread-1",
+      itemId: "assistant-1",
+      text: "前半段\n后半段",
+    });
+    expect(safeMessageActivity).toHaveBeenCalledTimes(2);
+
+    nowSpy.mockRestore();
+    vi.useRealTimers();
+  });
+
   it("routes agentMessage snapshots into assistant streaming delta updates", () => {
     const { result, dispatch, markProcessing, safeMessageActivity } = makeOptions();
 

@@ -15,6 +15,7 @@ import { parseFirstPacketTimeoutSeconds, stripBackendErrorPrefix } from "../util
 import { captureClaudeMcpRuntimeSnapshotFromRaw } from "../utils/claudeMcpRuntimeSnapshot";
 import { buildThreadDebugCorrelation } from "../utils/threadDebugCorrelation";
 import type { ThreadAction } from "./useThreadsReducer";
+import type { NormalizedThreadEvent } from "../contracts/conversationCurtainContracts";
 import { isDebugLightPathEnabled } from "../utils/realtimePerfFlags";
 import {
   buildThreadStreamCorrelationDimensions,
@@ -728,6 +729,7 @@ export function useThreadEventHandlers({
     onItemStarted,
     onItemUpdated,
     onItemCompleted,
+    onNormalizedRealtimeEvent,
     onReasoningSummaryDelta,
     onReasoningSummaryBoundary,
     onReasoningTextDelta,
@@ -917,6 +919,59 @@ export function useThreadEventHandlers({
       captureTurnItemDiagnostic(threadId, "completed", item);
     },
     [captureTurnItemDiagnostic, dispatch, onItemCompleted],
+  );
+
+  const onNormalizedRealtimeEventTracked = useCallback(
+    (event: NormalizedThreadEvent) => {
+      onNormalizedRealtimeEvent(event);
+      dispatch({ type: "markContinuationEvidence", threadId: event.threadId });
+      if (event.operation === "appendAgentMessageDelta") {
+        const textLength =
+          event.delta?.length ??
+          (event.item.kind === "message" ? event.item.text.length : 0);
+        if (textLength > 0 && event.item.kind === "message") {
+          recordAssistantStreamIngress({
+            workspaceId: event.workspaceId,
+            threadId: event.threadId,
+            itemId: event.item.id,
+            textLength,
+            source:
+              event.sourceMethod === "item/started" ||
+              event.sourceMethod === "item/updated"
+                ? "snapshot"
+                : "delta",
+          });
+        }
+      }
+      if (!event.rawItem) {
+        return;
+      }
+      if (event.operation === "itemStarted" || event.operation === "itemUpdated") {
+        maybeRecordAgentMessageSnapshotIngress(
+          event.workspaceId,
+          event.threadId,
+          event.rawItem,
+        );
+      }
+      if (event.operation === "itemStarted") {
+        captureTurnItemDiagnostic(event.threadId, "started", event.rawItem);
+        return;
+      }
+      if (event.operation === "itemUpdated") {
+        captureTurnItemDiagnostic(event.threadId, "updated", event.rawItem);
+        return;
+      }
+      if (event.operation === "itemCompleted") {
+        captureTurnItemDiagnostic(event.threadId, "completed", event.rawItem);
+      }
+    },
+    [
+      captureTurnItemDiagnostic,
+      dispatch,
+      maybeRecordAgentMessageSnapshotIngress,
+      onNormalizedRealtimeEvent,
+      recordAssistantStreamIngress,
+    ],
   );
 
   const finalizeTurnDiagnostic = useCallback(
@@ -1217,6 +1272,7 @@ export function useThreadEventHandlers({
       onAppServerEvent,
       onAgentMessageDelta: onAgentMessageDeltaTracked,
       onAgentMessageCompleted,
+      onNormalizedRealtimeEvent: onNormalizedRealtimeEventTracked,
       onItemStarted: onItemStartedTracked,
       onItemUpdated: onItemUpdatedTracked,
       onItemCompleted: onItemCompletedTracked,
@@ -1250,6 +1306,7 @@ export function useThreadEventHandlers({
       onAppServerEvent,
       onAgentMessageDeltaTracked,
       onAgentMessageCompleted,
+      onNormalizedRealtimeEventTracked,
       onItemStartedTracked,
       onItemUpdatedTracked,
       onItemCompletedTracked,

@@ -258,7 +258,7 @@ export function MessagesTimeline({
               workspaceId={workspaceId}
               threadId={threadId}
               isStreaming={
-                activeEngine === "claude" &&
+                (activeEngine === "claude" || activeEngine === "codex") &&
                 isThinking &&
                 item.role === "assistant" &&
                 item.id === latestAssistantMessageId
