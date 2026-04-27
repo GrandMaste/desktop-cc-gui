@@ -333,6 +333,13 @@ export function SettingsView({
   const [historyCompletionEnabled, setHistoryCompletionEnabledState] = useState(
     () => isHistoryCompletionEnabled(),
   );
+  const runtimePanelWorkspaces = useMemo(
+    () =>
+      allWorkspaces && allWorkspaces.length > 0
+        ? allWorkspaces
+        : groupedWorkspaces.flatMap((group) => group.workspaces),
+    [allWorkspaces, groupedWorkspaces],
+  );
   const [systemProxyEnabledDraft, setSystemProxyEnabledDraft] = useState(
     appSettings.systemProxyEnabled ?? false,
   );
@@ -2228,6 +2235,7 @@ export function SettingsView({
               <RuntimePoolSection
                 t={t}
                 appSettings={appSettings}
+                workspaces={runtimePanelWorkspaces}
                 onUpdateAppSettings={onUpdateAppSettings}
               />
             )}
