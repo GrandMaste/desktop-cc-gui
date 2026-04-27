@@ -1541,3 +1541,55 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 197: 记录 Nix npmDepsHash 刷新
+
+**Date**: 2026-04-27
+**Task**: 记录 Nix npmDepsHash 刷新
+**Branch**: `feature/v0.4.9`
+
+### Summary
+
+修复 Nix 前端 npm 依赖闭包 hash mismatch，并记录 OpenSpec 任务状态。
+
+### Main Changes
+
+任务目标：修复 `nix run github:chenxiangning/codemoss/feature/v0.4.9` 报出的 frontend npm deps fixed-output derivation hash mismatch。
+
+主要改动：
+- 更新 `flake.nix` 中 `npmDepsHash`，从旧值 `sha256-TT9Po/VVzuObcqAkv4HoRSo41IMvouorlPnPTabxcTA=` 切换为 Nix 实际计算出的 `sha256-FEbcbD0BtGpTLhhxIleci5ld9s7Ds43Qw5wYCRPI1+k=`。
+- 更新 `openspec/changes/fix-linux-nix-flake-packaging/tasks.md`，将 `3.7 Update npmDepsHash after dependency closure changes` 标记完成。
+- 保留 `5.2 Run Nix packaging validation on a Nix-capable host` 未完成，因为当前本机没有可用 `nix` 命令。
+
+涉及模块：
+- Nix packaging：`flake.nix`
+- OpenSpec 变更：`fix-linux-nix-flake-packaging`
+
+验证结果：
+- `openspec validate fix-linux-nix-flake-packaging --type change --strict --no-interactive` 通过。
+- `git diff --check` 通过。
+- 按 shell 基线检查 `nix --version`、`zsh -lc 'source ~/.zshrc && nix --version'`、`zsh -lc 'source ~/.zshrc && which nix && echo $PATH'`，本机仍不可用，因此未执行 Nix 实机构建验证。
+
+后续事项：
+- 在 Nix-capable host 上运行 `nix run github:chenxiangning/codemoss/feature/v0.4.9` 或 `nix build .# --no-link --print-build-logs`。
+- 若 hash mismatch 已通过但出现下一层构建错误，继续按 OpenSpec `5.2` 收集证据处理。
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `d844034632db71cf8d412778ac69b358aad7187b` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
