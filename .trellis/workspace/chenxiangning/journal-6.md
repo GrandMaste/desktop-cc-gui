@@ -1448,3 +1448,96 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 196: 记录 Claude 流式与 Runtime Pool 修复
+
+**Date**: 2026-04-27
+**Task**: 记录 Claude 流式与 Runtime Pool 修复
+**Branch**: `feature/v0.4.9`
+
+### Summary
+
+完成 Claude Windows 流式热路径、长线程实时渲染成本与 Runtime Pool 首屏恢复空态修复
+
+### Main Changes
+
+## 任务目标
+
+- 对当前工作区代码做边界条件、large-file governance、heavy-test-noise sentry、Windows/macOS 兼容性 review。
+- 发现问题后直接修复，并按中文 Conventional Commits 拆分提交。
+
+## 主要改动
+
+1. Claude Windows 流式转发阻塞
+   - 将 Claude forwarder 从 `commands.rs` 拆到 `src-tauri/src/engine/claude_forwarder.rs`。
+   - realtime delta 先 emit 到 frontend，再异步/限频做 runtime sync。
+   - 增加 `touch_claude_turn_activity`、`touch_claude_stream_activity`、`sync_claude_runtime_if_source_active`、`release_claude_terminal_activity`，保护 active-work lease 边界。
+   - Windows process diagnostics 增加 TTL cache、timeout、degraded fallback。
+
+2. Claude 长线程实时渲染成本
+   - `appendAgentDelta` 增加 Claude live assistant text fast path，避免每个 delta 都执行完整 `prepareThreadItems`。
+   - `Messages` 引入 bounded live tail working set，在主要 render 推导前裁剪默认实时窗口。
+   - 补充 live window、reducer fast path、compaction 状态链回归测试。
+
+3. Runtime Pool 首屏恢复空态
+   - `SettingsView` 为 Runtime 面板提供非空 workspace inventory fallback。
+   - `RuntimePoolSection` 增加 snapshot-first bootstrap、eligible workspace 去重/空值过滤、bounded fallback refresh、unmount cleanup。
+   - 补充非空 snapshot、空首屏 bootstrap、重复/空 id、disconnected skip、bounded retry 与 timer cleanup 测试。
+
+4. OpenSpec
+   - 新增并验证：
+     - `fix-claude-windows-streaming-latency`
+     - `fix-claude-long-thread-render-amplification`
+     - `fix-windows-runtime-pool-initial-load`
+
+## 涉及模块
+
+- backend runtime / engine：`src-tauri/src/engine/**`、`src-tauri/src/runtime/**`
+- frontend messages/thread state：`src/features/messages/**`、`src/features/threads/**`、`src/utils/threadItems.ts`
+- settings runtime console：`src/features/settings/components/**`
+- specs：`openspec/changes/**`
+
+## 验证结果
+
+已通过：
+
+- `cargo fmt --manifest-path src-tauri/Cargo.toml`
+- `npm run lint`
+- `npm run typecheck`
+- `npm run check:large-files:near-threshold`
+- `npm run check:large-files:gate`
+- `node --test scripts/check-heavy-test-noise.test.mjs`
+- `npm run check:heavy-test-noise`
+- `npm run check:runtime-contracts`
+- `npm run doctor:strict`
+- `cargo test --manifest-path src-tauri/Cargo.toml`
+- `git diff --check`
+- `openspec validate fix-claude-windows-streaming-latency --strict`
+- `openspec validate fix-claude-long-thread-render-amplification --strict`
+- `openspec validate fix-windows-runtime-pool-initial-load --strict`
+
+## 后续事项
+
+- 建议在 Windows native Claude Code 环境补一次人工 smoke：首轮/第二轮流式、tool-heavy prompt、prompt overflow compaction、Runtime Pool 冷启动首屏。
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `823727fe` | (see git log) |
+| `4c377c1c` | (see git log) |
+| `37cbdfe8` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

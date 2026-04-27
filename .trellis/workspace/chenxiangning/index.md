@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-6.md`
-- **Total Sessions**: 195
+- **Total Sessions**: 196
 - **Last Active**: 2026-04-27
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-6.md` | ~1450 | Active |
+| `journal-6.md` | ~1543 | Active |
 | `journal-5.md` | ~1949 | Archived |
 | `journal-4.md` | ~1975 | Archived |
 | `journal-3.md` | ~1972 | Archived |
@@ -34,6 +34,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 196 | 2026-04-27 | 记录 Claude 流式与 Runtime Pool 修复 | `823727fe`, `4c377c1c`, `37cbdfe8` | `feature/v0.4.9` |
 | 195 | 2026-04-27 | OpenSpec 回写并归档已验证提案 | `74347a25` | `feature/v0.4.9` |
 | 194 | 2026-04-27 | 大文件拆分与边界修复 | `e8c51d51c7a239d1eef4d6555cfd499edf5d3fc1` | `feature/v0.4.9` |
 | 193 | 2026-04-27 | 修复 Codex 多轮 Explored 串行 | `c342b172f7e6c5ce7f36efeba9f55218e6c5db7b` | `feature/v0.4.9` |
