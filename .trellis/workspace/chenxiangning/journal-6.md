@@ -1394,3 +1394,57 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 195: OpenSpec 回写并归档已验证提案
+
+**Date**: 2026-04-27
+**Task**: OpenSpec 回写并归档已验证提案
+**Branch**: `feature/v0.4.9`
+
+### Summary
+
+基于代码将已验证 OpenSpec 提案回写到主 specs 并归档 11 个 completed changes
+
+### Main Changes
+
+任务目标：
+- 基于当前代码状态，将已完成且已验证的 OpenSpec proposal/delta specs 回写到 `openspec/specs/**`。
+- 将回写后的已验证 change 从 active changes 移动到 `openspec/changes/archive/2026-04-27-*`。
+
+主要改动：
+- 回写 11 个 completed changes 的 delta requirements/scenarios 到主 specs。
+- 新增主 spec capability：`updater-check-fallback`、`conversation-curtain-normalization-core`、`conversation-curtain-assembly-core`、`conversation-approval-thread-scoping`、`claude-thread-session-continuity`、`claude-concurrent-realtime-session-isolation`、`codex-session-sidebar-state-parity`、`codex-generated-image-turn-linkage`、`codex-queued-user-bubble-continuity`、`computer-use-authorization-continuity`、`git-selective-commit`。
+- 补齐已有主 specs 中缺失的 requirements/scenarios：`conversation-lifecycle-contract`、`conversation-runtime-stability`、`codex-cross-source-history-unification`、`codex-realtime-canvas-message-idempotency`、`codex-cli-computer-use-broker`、`computer-use-availability-surface`、`git-panel-diff-view`、`claude-session-sidebar-state-parity`。
+- 归档 11 个已完成 changes：`fix-updater-check-fallback`、`unify-conversation-curtain-normalization`、`fix-codex-session-sidebar-state-parity`、`fix-approval-ui-thread-scoping`、`fix-claude-thread-session-continuity`、`complete-conversation-curtain-assembler`、`fix-claude-concurrent-realtime-isolation`、`fix-codex-generated-image-turn-linkage`、`fix-codex-computer-use-authorization-continuity`、`add-git-selective-commit`、`fix-codex-queued-user-bubble-gap`。
+
+涉及模块：
+- `openspec/specs/**`
+- `openspec/changes/archive/**`
+
+验证结果：
+- `openspec validate --all --strict`：通过，归档前 204 passed / 0 failed；归档后 193 passed / 0 failed。
+- `openspec list --json`：active changes 从 15 个收敛为 4 个未完成项。
+- `git diff --cached --name-only | rg -v '^openspec/' || true`：无非 OpenSpec 文件混入业务提交。
+
+后续事项：
+- 剩余 active changes 仍为未完成状态：`fix-linux-nix-flake-packaging`、`project-memory-refactor`、`claude-code-mode-progressive-rollout`、`add-codex-structured-launch-profile`。
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `74347a25` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
